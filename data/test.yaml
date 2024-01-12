@@ -1,0 +1,10 @@
+
+path: ../datasets/test  # dataset root dir
+train: train  # train images (relative to 'path') 128 images
+val: train  # val images (relative to 'path') 128 images
+
+# Classes
+names:
+  0: armor_sentry_blue
+  9: armor_sentry_red
+  18: armor_sentry_none

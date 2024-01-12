@@ -456,9 +456,7 @@ class LoadStreams:
 
 
 def img2label_paths(img_paths):
-    # Define label paths as a function of image paths
-    sa, sb = f'{os.sep}images{os.sep}', f'{os.sep}labels{os.sep}'  # /images/, /labels/ substrings
-    return [sb.join(x.rsplit(sa, 1)).rsplit('.', 1)[0] + '.txt' for x in img_paths]
+    return [x.split('.')[0]+".txt" for x in img_paths]
 
 
 class LoadImagesAndLabels(Dataset):
@@ -652,7 +650,7 @@ class LoadImagesAndLabels(Dataset):
         x = {}  # dict
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
         desc = f'{prefix}Scanning {path.parent / path.stem}...'
-        with Pool(1) as pool:
+        with Pool(8) as pool:
             pbar = tqdm(pool.imap(verify_image_label, zip(self.im_files, self.label_files, repeat(prefix))),
                         desc=desc,
                         total=len(self.im_files),
@@ -1056,14 +1054,10 @@ def verify_image_label(args):
             nf = 1  # label found
             with open(lb_file) as f:
                 lb = [x.split() for x in f.read().strip().splitlines() if len(x)]
-                if any(len(x) > 6 for x in lb):  # is segment
-                    classes = np.array([x[0] for x in lb], dtype=np.float32)
-                    segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in lb]  # (cls, xy1...)
-                    lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
+              
                 lb = np.array(lb, dtype=np.float32)
             nl = len(lb)
             if nl:
-                assert lb.shape[1] == 5, f'labels require 5 columns, {lb.shape[1]} columns detected'
                 assert (lb >= 0).all(), f'negative label values {lb[lb < 0]}'
                 assert (lb[:, 1:] <= 1).all(), f'non-normalized or out of bounds coordinates {lb[:, 1:][lb[:, 1:] > 1]}'
                 _, i = np.unique(lb, axis=0, return_index=True)
