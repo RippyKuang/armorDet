@@ -575,8 +575,7 @@ class LoadImagesAndLabels(Dataset):
             if include_class:
                 j = (label[:, 0:1] == include_class_array).any(1)
                 self.labels[i] = label[j]
-                if segment:
-                    self.segments[i] = [segment[idx] for idx, elem in enumerate(j) if elem]
+                
             if single_cls:  # single-class training, merge all classes into 0
                 self.labels[i][:, 0] = 0
 
@@ -727,7 +726,7 @@ class LoadImagesAndLabels(Dataset):
                                                  perspective=hyp['perspective'])
 
         nl = len(labels)  # number of labels
-        #xyxy左上角+右下角坐标 -> 归一化的xywh中心点+宽高， clip规范xyxy坐标在图片宽高内。
+        #xyxy左上角+右下角坐标 -> 归一化的中心点+宽高， clip规范xyxy坐标在图片宽高内。
         if nl:
             labels[:, 1:] = xyxyxyxyn(labels[:, 1:], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 

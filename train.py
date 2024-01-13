@@ -214,7 +214,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                               gs,
                                               single_cls,
                                               hyp=hyp,
-                                              augment=True,
+                                              augment=False,
                                               cache=None if opt.cache == 'val' else opt.cache,
                                               rect=opt.rect,
                                               rank=LOCAL_RANK,
@@ -250,9 +250,6 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
         callbacks.run('on_pretrain_routine_end', labels, names)
 
-    # DDP mode
-    if cuda and RANK != -1:
-        model = smart_DDP(model)
 
     # Model attributes
     nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps) 一般是3
@@ -357,6 +354,15 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
                                      (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                x_max=torch.max(targets[...,[2,4,6,8]],dim=-1,keepdim=True)[0]
+                x_min=torch.min(targets[...,[2,4,6,8]],dim=-1,keepdim=True)[0]
+                y_max=torch.max(targets[...,[3,5,7,9]],dim=-1,keepdim=True)[0]
+                y_min=torch.min(targets[...,[3,5,7,9]],dim=-1,keepdim=True)[0]
+                w_ = (x_max - x_min)
+                h_ = (y_max - y_min)
+                xy = torch.cat((torch.sum(targets[:,[2,4,6,8]],dim=-1,keepdim=True),torch.sum(targets[:,[3,5,7,9]],dim=-1,keepdim=True)),dim=1)/4 
+
+                targets = torch.cat((targets[...,:2],xy,w_,h_),dim=-1)
                 callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
                 if callbacks.stop_training:
                     return
@@ -366,7 +372,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
         scheduler.step()
 
-        if RANK in {-1, 0}:
+        if RANK in {1}:
             # mAP
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
@@ -514,7 +520,6 @@ def main(opt, callbacks=Callbacks()):
     # Checks
     if RANK in {-1, 0}:
         print_args(vars(opt))
-        check_requirements(ROOT / 'requirements.txt')
 
     # Resume (from specified or most recent last.pt)
     if opt.resume and not check_comet_resume(opt) and not opt.evolve:
