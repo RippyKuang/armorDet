@@ -755,9 +755,9 @@ class LoadImagesAndLabels(Dataset):
             # labels = cutout(img, labels, p=0.5)
             # nl = len(labels)  # update after cutout
 
-        labels_out = torch.zeros((nl, 9))
+        labels_out = torch.zeros((nl, 10))
         if nl:
-            labels_out = torch.from_numpy(labels)
+            labels_out[:,1:] = torch.from_numpy(labels)
 
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB

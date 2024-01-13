@@ -198,7 +198,7 @@ class ComputeLoss:
         # 3、剩余的gt box，每个gt box使用至少三个方格来预测，一个是gt box中心点所在方格，另两个是中心点离的最近的两个方格，如下图
         na, nt = self.na, targets.shape[0]  # number of anchors一般是3, nt是这个bs中所有的gt box数量
         tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=self.device)  # 7个数，前6个数对应targets的第二维度6 normalized to gridspace gain
+        gain = torch.ones(11, device=self.device)  # 7个数，前6个数对应targets的第二维度6 normalized to gridspace gain
         #ai:anchor的索引，shape为(3, gt box的数量)， 3行里，第一行全是0， 第2行全是1， 第三行全是2，表示每个gt box都对应到3个anchor上。
         ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), 2)  # 加上anchor的索引，把target重复三边 (3,nt,7),targets[0][0]和target[1][0]都属
@@ -216,23 +216,29 @@ class ComputeLoss:
             device=self.device).float() * g  # offsets 乘了个g，所以都是0.5
 
         for i in range(self.nl):    #对每个检测头进行遍历
-            anchors, shape = self.anchors[i], p[i].shape     #p[i]:[16,3,80,80,85] anchors:[3,3,2]
+            anchors, shape = self.anchors[i], p[i].shape     #p[i]:[16,3,80,80,12] anchors:[3,3,2]
             #shape  [batchsize,anchor box数量,特征图大小,特征图大小,80+4+1]
-            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy 重复shape的第三二位
+            gain[2:10] = torch.tensor(shape)[[3, 2, 3, 2, 3, 2, 3, 2]]  # xyxy 重复shape的第三二位
 
             # Match targets to anchors
-            #2：6代表target里的xywh,因为是归一化后的,所以需要乘上xyxy来恢复原先的尺度
-            t = targets * gain  # target shape(3,n,7)
+            #2：10代表target里的xyxyxyxy,因为是归一化后的,所以需要乘上xyxy来恢复原先的尺度
+            t = targets * gain  # target shape(3,n,11)
             if nt:  #nt是gt box的数量
                 # Matches
-                r = t[..., 4:6] / anchors[:, None]  # shape为[3,nt,2] 2是gt box的w和h与anchor的w和h的比值 anchors[:, None] 的形状为3,1,2
+                x_max=torch.max(t[...,[2,4,6,8]],dim=2)[0]
+                x_min=torch.min(t[...,[2,4,6,8]],dim=2)[0]
+                y_max=torch.max(t[...,[3,5,7,9]],dim=2)[0]
+                y_min=torch.min(t[...,[3,5,7,9]],dim=2)[0]
+                w_ = (x_max - x_min).reshape(self.na,nt,1)
+                h_ = (y_max - y_min).reshape(self.na,nt,1)
+                r = torch.cat((w_,h_),dim=-1) / anchors[:, None]  # shape为[3,nt,2] 2是gt box的w和h与anchor的w和h的比值 anchors[:, None] 的形状为3,1,2
                 j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  #当gt box的w和h与anchor的w和h的比值比设置的超参数anchor_t大时，则此gt box去除
                 # j的形状是(3,nt),里面的值均为true或false
                 t = t[j]  # 过滤掉不合适的gtbox
 
                 # Offsets
                 # t的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h,anchor的索引)
-                gxy = t[:, 2:4]  # grid xy
+                gxy = (t[:,[2,4,6,8]]+t[:,[3,5,7,9]])/2  # grid xy
                 gxi = gain[[2, 3]] - gxy  # 将以图像左上角为原点的坐标变换为以图像右下角为原点的坐标 gain[2,3]是特征图的xy长度
                 #g是0.5
                 #下面是寻找另外两个负责该gt的gird
