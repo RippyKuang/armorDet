@@ -12,7 +12,7 @@ import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 
-from utils.general import LOGGER, check_version, colorstr, resample_segments, segment2box, xywhn2xyxy
+from utils.general import LOGGER, check_version, colorstr, resample_segments, segment2box, xywhn2xyxy,xyxyxyxy2xywh
 from utils.metrics import bbox_ioa
 
 IMAGENET_MEAN = 0.485, 0.456, 0.406  # RGB mean
@@ -151,7 +151,7 @@ def random_perspective(im,
                        perspective=0.0,
                        border=(0, 0)):
     # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(0.1, 0.1), scale=(0.9, 1.1), shear=(-10, 10))
-    # targets = [cls, xyxy]
+    # targets = [cls, xyxyxyxy]
 
     height = im.shape[0] + border[0] * 2  # shape(h,w,c)
     width = im.shape[1] + border[1] * 2
@@ -193,10 +193,7 @@ def random_perspective(im,
             im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
 
     # Visualize
-    # import matplotlib.pyplot as plt
-    # ax = plt.subplots(1, 2, figsize=(12, 6))[1].ravel()
-    # ax[0].imshow(im[:, :, ::-1])  # base
-    # ax[1].imshow(im2[:, :, ::-1])  # warped
+ 
 
     # Transform label coordinates
     n = len(targets)
@@ -215,24 +212,19 @@ def random_perspective(im,
                 new[i] = segment2box(xy, width, height)
 
         else:  # warp boxes
-            xy = np.ones((n * 4, 3))
-            xy[:, :2] = targets[:, [1, 2, 3, 4, 1, 4, 3, 2]].reshape(n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
+            xy = np.ones((n*4, 3))
+            xy[:, :2] = targets[:,1:].reshape(n*4, 2)  # x1y1, x2y2, x1y2, x2y1
             xy = xy @ M.T  # transform
             xy = (xy[:, :2] / xy[:, 2:3] if perspective else xy[:, :2]).reshape(n, 8)  # perspective rescale or affine
 
-            # create new boxes
-            x = xy[:, [0, 2, 4, 6]]
-            y = xy[:, [1, 3, 5, 7]]
-            new = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
-
             # clip
-            new[:, [0, 2]] = new[:, [0, 2]].clip(0, width)
-            new[:, [1, 3]] = new[:, [1, 3]].clip(0, height)
+            xy[:, [0, 2, 4, 6]] = xy[:, [0, 2, 4, 6]].clip(0, width)
+            xy[:, [1, 3, 5, 7]] = xy[:, [1, 3, 5, 7]].clip(0, height)
 
         # filter candidates
-        i = box_candidates(box1=targets[:, 1:5].T * s, box2=new.T, area_thr=0.01 if use_segments else 0.10)
+        i = box_candidates(box1=xyxyxyxy2xywh(targets[:, 1:] * s), box2=xyxyxyxy2xywh(xy), area_thr=0.01 if use_segments else 0.10)
         targets = targets[i]
-        targets[:, 1:5] = new[i]
+        targets[:, 1:] = new[i]
 
     return im, targets
 
@@ -296,8 +288,9 @@ def mixup(im, labels, im2, labels2):
 
 def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
-    w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
-    w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+    
+    w1, h1 = box1[2],box1[3]
+    w2, h2 = box2[2],box2[3]
     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
 

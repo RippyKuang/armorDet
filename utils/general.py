@@ -13,6 +13,7 @@ import os
 import platform
 import random
 import re
+import copy
 import signal
 import subprocess
 import sys
@@ -759,7 +760,18 @@ def xywhn2xyxy(x, w=640, h=640, padw=0, padh=0):
     y[..., 2] = w * (x[..., 0] + x[..., 2] / 2) + padw  # bottom right x
     y[..., 3] = h * (x[..., 1] + x[..., 3] / 2) + padh  # bottom right y
     return y
-
+def format_(x, w=640, h=640, padw=0, padh=0):
+    # 适应缩放
+    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
+    y[..., 0] = w * (x[..., 0]) + padw  #  x1
+    y[..., 1] = h * (x[..., 1]) + padh  #  y1
+    y[..., 2] = w * (x[..., 2]) + padw  #  x2
+    y[..., 3] = h * (x[..., 3]) + padh  #  y2
+    y[..., 4] = w * (x[..., 4]) + padw  #  x3
+    y[..., 5] = h * (x[..., 5]) + padh  #  y3
+    y[..., 6] = w * (x[..., 6]) + padw  #  x4
+    y[..., 7] = h * (x[..., 7]) + padh  #  y4
+    return y
 
 def xyxy2xywhn(x, w=640, h=640, clip=False, eps=0.0):
     # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] normalized where xy1=top-left, xy2=bottom-right
@@ -772,7 +784,18 @@ def xyxy2xywhn(x, w=640, h=640, clip=False, eps=0.0):
     y[..., 3] = (x[..., 3] - x[..., 1]) / h  # height
     return y
 
-
+def xyxyxyxy2xywh(_labels):
+    labels = copy.deepcopy(_labels)
+    for i,l in enumerate(labels):
+        max_x = max(l[-8],l[-6],l[-4],l[-2])
+        min_x = min(l[-8],l[-6],l[-4],l[-2])
+        max_y = max(l[-7],l[-5],l[-3],l[-1])
+        min_y = min(l[-7],l[-5],l[-3],l[-1])
+        w = max_x - min_x
+        h = max_y - min_y
+        labels[i][3] = w
+        labels[i][4] = h
+    return labels
 def xyn2xy(x, w=640, h=640, padw=0, padh=0):
     # Convert normalized segments into pixel segments, shape (n,2)
     y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)

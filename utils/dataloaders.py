@@ -32,7 +32,7 @@ from utils.augmentations import (Albumentations, augment_hsv, classify_albumenta
                                  letterbox, mixup, random_perspective)
 from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
-                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
+                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn,format_)
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
@@ -149,8 +149,8 @@ def create_dataloader(path,
     if rect and shuffle:
         LOGGER.warning('WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
-    with torch_distributed_zero_first(rank):  # 只有主进程、加载数据
-        dataset = LoadImagesAndLabels(
+  
+    dataset = LoadImagesAndLabels(
             path,
             imgsz,
             batch_size,
@@ -175,7 +175,7 @@ def create_dataloader(path,
     return loader(dataset,
                   batch_size=batch_size,
                   shuffle=shuffle and sampler is None,
-                  num_workers=nw,
+                  num_workers=0,
                   sampler=sampler,
                   pin_memory=PIN_MEMORY,
                   collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn,
@@ -566,9 +566,6 @@ class LoadImagesAndLabels(Dataset):
         self.batch = bi  # batch index of image
         self.n = n
         self.indices = np.arange(n)
-        if rank > -1:  # DDP indices (see: SmartDistributedSampler)
-            # force each rank (i.e. GPU process) to sample the same subset of data on every epoch
-            self.indices = self.indices[np.random.RandomState(seed=seed).permutation(n) % WORLD_SIZE == RANK]
 
         # Update labels
         include_class = []  # filter labels to include only these classes (optional)
@@ -697,7 +694,7 @@ class LoadImagesAndLabels(Dataset):
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        if mosaic:   #使用mosaic数据增强
+        if True:   #使用mosaic数据增强
             # Load mosaic
             img, labels = self.load_mosaic(index) #load_mosaic将随机选取4张图片组合成一张图片
             shapes = None
@@ -717,8 +714,8 @@ class LoadImagesAndLabels(Dataset):
 
             # img缩放与补黑边后,label的框需要适配,xywhn2xyxy是将标注的label中归一化的xywh中心点+宽高->xyxy左上角+右下角坐标,再加上补边的偏移
             labels = self.labels[index].copy()
-            if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+            if labels.size:   # 适应缩放
+                labels[:, 1:] = format_(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
             if self.augment:
                 img, labels = random_perspective(img,
@@ -824,13 +821,13 @@ class LoadImagesAndLabels(Dataset):
             # Labels
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
             if labels.size:
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
+                labels[:, 1:] = format_(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
                 segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
             labels4.append(labels)
             segments4.extend(segments)
 
         # Concat/clip labels
-        labels4 = np.concatenate(labels4, 0)
+        labels4 = np.concatenate(labels4, 0)   #形状为 (4,9)
         for x in (labels4[:, 1:], *segments4):
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
         # img4, labels4 = replicate(img4, labels4)  # replicate

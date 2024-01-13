@@ -8,6 +8,7 @@ import random
 import numpy as np
 import torch
 import yaml
+import copy
 from tqdm import tqdm
 
 from utils import TryExcept
@@ -32,7 +33,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
     m = model.module.model[-1] if hasattr(model, 'module') else model.model[-1]  # Detect()
     shapes = imgsz * dataset.shapes / dataset.shapes.max(1, keepdims=True)
     scale = np.random.uniform(0.9, 1.1, size=(shapes.shape[0], 1))  # augment scale
-    wh = torch.tensor(np.concatenate([l[:, 3:5] * s for s, l in zip(shapes * scale, dataset.labels)])).float()  # wh
+    wh = torch.tensor(np.concatenate([l[:, 3:5] * s for s, l in zip(shapes * scale, xyxyxyxy2xywh(dataset.labels))])).float()  # wh
 
     def metric(k):  # compute metric
         r = wh[:, None] / k[None]
@@ -62,6 +63,23 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
         else:
             s = f'{PREFIX}Done ⚠️ (original anchors better than new anchors, proceeding with original anchors)'
         LOGGER.info(s)
+
+def xyxyxyxy2xywh(_labels):
+    labels = copy.deepcopy(_labels)
+    for i,img in enumerate(labels):
+        for j,l in enumerate(img):
+            max_x = max(l[1],l[3],l[5],l[7])
+            min_x = min(l[1],l[3],l[5],l[7])
+            max_y = max(l[2],l[4],l[6],l[8])
+            min_y = min(l[2],l[4],l[6],l[8])
+            w = max_x - min_x
+            h = max_y - min_y
+            labels[i][j][3] = w
+            labels[i][j][4] = h
+    return labels
+
+            
+
 
 
 def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen=1000, verbose=True):

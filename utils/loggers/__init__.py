@@ -4,6 +4,7 @@ Logging utils
 """
 import json
 import os
+import copy
 import warnings
 from pathlib import Path
 
@@ -166,9 +167,20 @@ class Loggers():
         if self.comet_logger:
             self.comet_logger.on_pretrain_routine_start()
 
-    def on_pretrain_routine_end(self, labels, names):
+    def on_pretrain_routine_end(self, _labels, names):
         # Callback runs on pre-train routine end
         if self.plots:
+            labels = copy.deepcopy(_labels)
+            for i,l in enumerate(labels):
+                max_x = max(l[1],l[3],l[5],l[7])
+                min_x = min(l[1],l[3],l[5],l[7])
+                max_y = max(l[2],l[4],l[6],l[8])
+                min_y = min(l[2],l[4],l[6],l[8])
+                w = max_x - min_x
+                h = max_y - min_y
+                labels[i][3] = w
+                labels[i][4] = h
+            labels = labels[:,0:5]
             plot_labels(labels, names, self.save_dir)
             paths = self.save_dir.glob('*labels*.jpg')  # training labels
             if self.wandb:

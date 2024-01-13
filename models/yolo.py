@@ -50,7 +50,7 @@ class Detect(nn.Module):
     def __init__(self, nc=80, anchors=(), ch=(), inplace=True):  # detection layer
         super().__init__()
         self.nc = nc  # number of classes
-        self.no = nc + 5  # number of outputs per anchor +xywh conf
+        self.no = nc + 9  # number of outputs per anchor +xyxyxyxy conf
         self.nl = len(anchors)  # number of detection layers 每层有一个anchor
         self.na = len(anchors[0]) // 2  # number of anchors 每个anchor有两个参数，所以除以二
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
