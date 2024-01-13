@@ -224,7 +224,7 @@ def random_perspective(im,
         # filter candidates
         i = box_candidates(box1=xyxyxyxy2xywh(targets[:, 1:] * s), box2=xyxyxyxy2xywh(xy), area_thr=0.01 if use_segments else 0.10)
         targets = targets[i]
-        targets[:, 1:] = new[i]
+        targets[:, 1:] = xy[i]
 
     return im, targets
 
@@ -289,8 +289,8 @@ def mixup(im, labels, im2, labels2):
 def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
     
-    w1, h1 = box1[2],box1[3]
-    w2, h2 = box2[2],box2[3]
+    w1, h1 = box1[:,2],box1[:,3]
+    w2, h2 = box2[:,2],box2[:,3]
     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
 

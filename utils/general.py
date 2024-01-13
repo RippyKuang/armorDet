@@ -783,6 +783,15 @@ def xyxy2xywhn(x, w=640, h=640, clip=False, eps=0.0):
     y[..., 2] = (x[..., 2] - x[..., 0]) / w  # width
     y[..., 3] = (x[..., 3] - x[..., 1]) / h  # height
     return y
+def xyxyxyxyn(x, w=640, h=640, clip=False, eps=0.0):
+    # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] normalized where xy1=top-left, xy2=bottom-right
+    if clip:
+        clip_boxes(x, (h - eps, w - eps))  # warning: inplace clip
+    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
+    y[..., [0,2,4,6]] = ((x[..., [0,2,4,6]])) / w  # x center
+    y[..., [1,3,5,7]] = ((x[..., [1,3,5,7]])) / h  # y center
+  
+    return y
 
 def xyxyxyxy2xywh(_labels):
     labels = copy.deepcopy(_labels)
@@ -873,9 +882,14 @@ def clip_boxes(boxes, shape):
         boxes[..., 1].clamp_(0, shape[0])  # y1
         boxes[..., 2].clamp_(0, shape[1])  # x2
         boxes[..., 3].clamp_(0, shape[0])  # y2
+        boxes[..., 4].clamp_(0, shape[1])  # x3
+        boxes[..., 5].clamp_(0, shape[0])  # y3
+        boxes[..., 6].clamp_(0, shape[1])  # x4
+        boxes[..., 7].clamp_(0, shape[0])  # y4
+        
     else:  # np.array (faster grouped)
-        boxes[..., [0, 2]] = boxes[..., [0, 2]].clip(0, shape[1])  # x1, x2
-        boxes[..., [1, 3]] = boxes[..., [1, 3]].clip(0, shape[0])  # y1, y2
+        boxes[..., [0, 2, 4, 6]] = boxes[..., [0, 2, 4, 6]].clip(0, shape[1])  # x1, x2
+        boxes[..., [1, 3, 5, 7]] = boxes[..., [1, 3, 5, 7]].clip(0, shape[0])  # y1, y2
 
 
 def clip_segments(segments, shape):

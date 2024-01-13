@@ -32,7 +32,7 @@ from utils.augmentations import (Albumentations, augment_hsv, classify_albumenta
                                  letterbox, mixup, random_perspective)
 from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
-                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn,format_)
+                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn,xyxyxyxyn,format_)
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
@@ -729,7 +729,7 @@ class LoadImagesAndLabels(Dataset):
         nl = len(labels)  # number of labels
         #xyxy左上角+右下角坐标 -> 归一化的xywh中心点+宽高， clip规范xyxy坐标在图片宽高内。
         if nl:
-            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
+            labels[:, 1:] = xyxyxyxyn(labels[:, 1:], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
         if self.augment:
             # Albumentations
@@ -755,9 +755,9 @@ class LoadImagesAndLabels(Dataset):
             # labels = cutout(img, labels, p=0.5)
             # nl = len(labels)  # update after cutout
 
-        labels_out = torch.zeros((nl, 6))
+        labels_out = torch.zeros((nl, 9))
         if nl:
-            labels_out[:, 1:] = torch.from_numpy(labels)
+            labels_out = torch.from_numpy(labels)
 
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
