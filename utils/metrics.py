@@ -14,6 +14,16 @@ import torch
 from utils import TryExcept, threaded
 
 
+def xyxyxyxy2xyxy(_labels):
+    labels = _labels.clone() if isinstance(_labels, torch.Tensor) else np.copy(_labels)
+    x_max=torch.max(labels[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
+    x_min=torch.min(labels[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
+    y_max=torch.max(labels[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
+    y_min=torch.min(labels[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
+
+    return torch.cat([x_min,y_min,x_max,y_max],dim=-1)
+
+
 def fitness(x):
     # Model fitness as a weighted combination of metrics
     w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
@@ -272,6 +282,9 @@ def box_iou(box1, box2, eps=1e-7):
         iou (Tensor[N, M]): the NxM matrix containing the pairwise
             IoU values for every element in boxes1 and boxes2
     """
+    if(box1.shape[-1]==8):
+        box1 = xyxyxyxy2xyxy(box1)
+        box2 = xyxyxyxy2xyxy(box2)
 
     # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
     (a1, a2), (b1, b2) = box1.unsqueeze(1).chunk(2, 2), box2.unsqueeze(0).chunk(2, 2)

@@ -196,7 +196,7 @@ class Loggers():
         # Callback runs on train batch end
         # ni: number integrated batches (since train start)
         if self.plots:
-            if ni < 100:
+            if ni < 3:
                 f = self.save_dir / f'train_batch{ni}.jpg'  # filename
                 plot_images(imgs, targets, paths, f)
                 if ni == 0 and self.tb and not self.opt.sync_bn:

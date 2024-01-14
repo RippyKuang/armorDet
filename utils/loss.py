@@ -142,8 +142,8 @@ class ComputeLoss:
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
-                #pxy=pi[:, :2]
-                #pwh=pi[:, 2:4]
+               
+                #peh=pi[:, 2:4]
                 #_=pi[:, 4:5] 置信度
                 #pcls = 剩下80个分类
 
@@ -185,7 +185,7 @@ class ComputeLoss:
                 # with open('targets.txt', 'a') as file:
                 #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
 
-            obji = self.BCEobj(pi[..., 4], tobj)
+            obji = self.BCEobj(pi[..., 8], tobj)
             lobj += obji * self.balance[i]  # obj loss
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()

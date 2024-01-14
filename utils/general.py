@@ -805,6 +805,16 @@ def xyxyxyxy2xywh(_labels):
         labels[i][3] = w
         labels[i][4] = h
     return labels
+
+def xyxyxyxy2xyxy(_labels):
+    labels = _labels.clone() if isinstance(_labels, torch.Tensor) else np.copy(_labels)
+    x_max=torch.max(labels[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
+    x_min=torch.min(labels[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
+    y_max=torch.max(labels[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
+    y_min=torch.min(labels[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
+
+    return torch.cat([x_min,y_min,x_max,y_max],dim=-1)
+
 def xyn2xy(x, w=640, h=640, padw=0, padh=0):
     # Convert normalized segments into pixel segments, shape (n,2)
     y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
@@ -840,7 +850,7 @@ def resample_segments(segments, n=1000):
     return segments
 
 
-def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None):
+def scale_boxes(img1_shape, boxes_ep, img0_shape, ratio_pad=None):
     # Rescale boxes (xyxy) from img1_shape to img0_shape
     if ratio_pad is None:  # calculate from img0_shape
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
@@ -849,11 +859,12 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None):
         gain = ratio_pad[0][0]
         pad = ratio_pad[1]
 
-    boxes[..., [0, 2]] -= pad[0]  # x padding
-    boxes[..., [1, 3]] -= pad[1]  # y padding
-    boxes[..., :4] /= gain
-    clip_boxes(boxes, img0_shape)
-    return boxes
+    boxes_ep[..., [0, 2, 4, 6]] -= pad[0]  # x padding
+    boxes_ep[..., [1, 3, 5, 7]] -= pad[1]  # y padding
+
+    boxes_ep[..., :8] /= gain
+    clip_boxes(boxes_ep, img0_shape)
+    return boxes_ep
 
 
 def scale_segments(img1_shape, segments, img0_shape, ratio_pad=None, normalize=False):
@@ -908,7 +919,6 @@ def non_max_suppression(
         iou_thres=0.45,
         classes=None,
         agnostic=False,
-        multi_label=False,
         labels=(),
         max_det=300,
         nm=0,  # number of masks
@@ -930,8 +940,8 @@ def non_max_suppression(
     if mps:  # MPS not fully supported yet, convert tensors to CPU before NMS
         prediction = prediction.cpu()
     bs = prediction.shape[0]  # batch size
-    nc = prediction.shape[2] - nm - 5  # number of classes
-    xc = prediction[..., 4] > conf_thres  # candidates
+    nc = prediction.shape[2] - nm - 9 # number of classes
+    xc = prediction[...,8] > conf_thres  # candidates
 
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
@@ -939,44 +949,32 @@ def non_max_suppression(
     max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()
     time_limit = 0.5 + 0.05 * bs  # seconds to quit after
     redundant = True  # require redundant detections
-    multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
     merge = False  # use merge-NMS
 
     t = time.time()
-    mi = 5 + nc  # mask start index
-    output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
-    for xi, x in enumerate(prediction):  # image index, image inference
+    mi = 9 + nc  # mask start index
+    output_xyxy = [torch.zeros((0, 6), device=prediction.device)] * bs
+    output_ep = [torch.zeros((0, 10), device=prediction.device)] * bs
+    for xi, _x in enumerate(prediction):  # image index, image inference
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
-        x = x[xc[xi]]  # 进行置信度过滤
-
-        # Cat apriori labels if autolabelling 先验标签是自动标签？看不懂喵
-        if labels and len(labels[xi]):
-            lb = labels[xi]
-            v = torch.zeros((len(lb), nc + nm + 5), device=x.device)
-            v[:, :4] = lb[:, 1:5]  # box
-            v[:, 4] = 1.0  # conf
-            v[range(len(lb)), lb[:, 0].long() + 5] = 1.0  # cls
-            x = torch.cat((x, v), 0)
-
+        _x = _x[xc[xi]]  # 进行置信度过滤
         # If none remain process next image
-        if not x.shape[0]:  #如果不剩东西了
+        if not _x.shape[0]:  #如果不剩东西了
             continue
 
         # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
+        _x[:, 9:] *= _x[:, 8:9]  # conf = obj_conf * cls_conf
 
         # Box/Mask
-        box = xywh2xyxy(x[:, :4])  # center_x, center_y, width, height) to (x1, y1, x2, y2)
-        mask = x[:, mi:]  # zero columns if no masks 这时mask的第二维度是0
+
+        box = xyxyxyxy2xyxy(_x[:, :9])  # center_x, center_y, width, height) to (x1, y1, x2, y2)
 
         # Detections matrix nx6 (xyxy, conf, cls)
-        if multi_label:  
-            i, j = (x[:, 5:mi] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, 5 + j, None], j[:, None].float(), mask[i]), 1)
-        else:  # best class only
-            conf, j = x[:, 5:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
-            x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres] #0-3是box，4是置信度，5是类别
+        conf, j = _x[:, 9:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
+        thres_ = conf.view(-1) > conf_thres
+        x = torch.cat((box, conf, j.float()), 1)[thres_] #0-3是box，4是置信度，5是类别
+        x_ep = torch.cat((_x[:, :8], conf,j.float()),1)[thres_]
         # 从这里开始x的格式都是xyxy
         # Filter by class
         if classes is not None:   #筛选出指定的class，nms仅仅对指定的class进行nms。
@@ -990,7 +988,9 @@ def non_max_suppression(
         n = x.shape[0]  # number of boxes
         if not n:  # no boxes
             continue
-        x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # 按照置信度降序排序，并且排除过多的框
+        thres_ = x[:, 4].argsort(descending=True)[:max_nms]
+        x = x[thres_]  # 按照置信度降序排序，并且排除过多的框
+        x_ep = x_ep[thres_]
 
         # Batched NMS
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # 多类别中应用NMS 
@@ -1005,14 +1005,10 @@ def non_max_suppression(
             if redundant:
                 i = i[iou.sum(1) > 1]  # require redundancy
 
-        output[xi] = x[i]
-        if mps:
-            output[xi] = output[xi].to(device)
-        if (time.time() - t) > time_limit:
-            LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
-            break  # time limit exceeded
+        output_xyxy[xi] = x[i]
+        output_ep[xi] = x_ep[i]
 
-    return output
+    return output_xyxy,output_ep
 
 
 def strip_optimizer(f='best.pt', s=''):  # from utils.general import *; strip_optimizer()

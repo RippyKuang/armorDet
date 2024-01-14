@@ -693,7 +693,7 @@ class LoadImagesAndLabels(Dataset):
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        if True:   #使用mosaic数据增强
+        if False:   #使用mosaic数据增强
             # Load mosaic
             img, labels = self.load_mosaic(index) #load_mosaic将随机选取4张图片组合成一张图片
             shapes = None
