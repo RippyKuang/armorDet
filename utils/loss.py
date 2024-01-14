@@ -112,7 +112,7 @@ class ComputeLoss:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  #m.nl为3, balance仍未[4.0, 1.0, 0.4]
         self.ssi = list(m.stride).index(16) if autobalance else 0  # det.stride是[ 8., 16., 32.]， self.ssi表示stride为16的索引，当autobalance为true时，self.ssi为1.
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
-        self.l1 = nn.L1Loss()
+        self.l1 = nn.L1Loss(reduction='sum')
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
@@ -140,6 +140,7 @@ class ComputeLoss:
             #tobj shape: torch.Size([16, 3, 80, 80])
             #pi shape： torch.Size([16, 3, 80, 80, 85])
             n = b.shape[0]  # number of targets 下文中的712
+            lpts= 0
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
@@ -149,7 +150,7 @@ class ComputeLoss:
                 #pcls = 剩下80个分类
 
                 # Regression
-                lpts = self.l1(pep[...,:8], tbox[i][:,4:])
+                lpts += self.l1(pep[...,:8], tbox[i][:,4:])
                 x_max=torch.max(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 x_min=torch.min(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 y_max=torch.max(pep[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
@@ -163,17 +164,19 @@ class ComputeLoss:
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i] #表示把预测框的宽和高限制在4倍的anchors内
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 #计算808个预测框与gt box的iou loss
-                iou = bbox_iou(pbox, tbox[i][:,:4], CIoU=True).squeeze()  # iou(prediction, target)
-                lbox += (1.0 - iou).mean()  # iou loss
+                iou = bbox_iou(pbox, tbox[i][:,:4]).squeeze()  # iou(prediction, target)
+                lbox += (1.0 - iou).mean() + lpts  # iou loss
+              
 
                 # Objectness
                 iou = iou.detach().clamp(0).type(tobj.dtype) #detach函数使得iou不可反向传播， clamp将小于0的iou裁剪为0
+                lpts = lpts.detach().type(tobj.dtype) #detach函数使得iou不可反向传播， clamp将小于0的iou裁剪为0
                 if self.sort_obj_iou:
                     j = iou.argsort() #返回的是排序后的score_iou中的元素在原始score_iou中的位置。
                     b, a, gj, gi, iou = b[j], a[j], gj[j], gi[j], iou[j]
                 if self.gr < 1:
                     iou = (1.0 - self.gr) + self.gr * iou
-                tobj[b, a, gj, gi] = iou  # iou ratio
+                tobj[b, a, gj, gi] =(iou + lpts.sigmoid())/2 # iou ratio
                 #tobj:(16, 3, 80, 80,808),
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
@@ -183,15 +186,15 @@ class ComputeLoss:
                     lcls += self.BCEcls(pcls, t)  # BCE
                     #self.cn和self.cp分别是标签平滑的负样本平滑标签和正样本平滑标签
 
-            obji = self.BCEobj(pi[..., 8], tobj)
-            lobj += obji * self.balance[i]  # obj loss
+            obji = self.BCEobj(pi[..., 8], tobj) 
+            lobj += obji * self.balance[i]# obj loss
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
 
         if self.autobalance:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
         lbox *= self.hyp['box']
-        lobj *= self.hyp['obj'] + lpts
+        lobj *= self.hyp['obj']
         lcls *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 
