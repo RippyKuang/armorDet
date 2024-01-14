@@ -165,7 +165,7 @@ class ComputeLoss:
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 #计算808个预测框与gt box的iou loss
                 iou = bbox_iou(pbox, tbox[i][:,:4]).squeeze()  # iou(prediction, target)
-                lbox += (1.0 - iou).mean() + lpts  # iou loss
+                lbox += 0.2*(1.0 - iou).mean() + 0.8*lpts.sigmoid()  # iou loss
               
 
                 # Objectness
@@ -176,7 +176,7 @@ class ComputeLoss:
                     b, a, gj, gi, iou = b[j], a[j], gj[j], gi[j], iou[j]
                 if self.gr < 1:
                     iou = (1.0 - self.gr) + self.gr * iou
-                tobj[b, a, gj, gi] =(iou + lpts.sigmoid())/2 # iou ratio
+                tobj[b, a, gj, gi] =0.2*iou + 0.8*lpts.sigmoid() # iou ratio
                 #tobj:(16, 3, 80, 80,808),
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)

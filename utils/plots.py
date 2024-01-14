@@ -182,7 +182,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
         if paths:
             annotator.text([x + 5, y + 5], text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
-        if len(targets) > 0: #ic xyxyxyxy
+        if len(targets) > 0: #ic xyxyxyxy conf
             ti = targets[targets[:, 0] == i]  # image targets
             boxes = ti[:, 2:]
             classes = ti[:, 1].astype('int')
@@ -197,11 +197,12 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
                     boxes *= scale
             boxes[:,[0, 2, 4, 6]] += x
             boxes[:,[1, 3, 5, 7]] += y
+
             for j, box in enumerate(boxes.tolist()):
                 cls = classes[j]
                 color = colors(cls)
                 cls = names[cls] if names else cls
-                if labels or conf[j] > 0.25:  # 0.25 conf thresh
+                if labels or conf[j] > 0.8:  # 0.25 conf thresh
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.EP_box_label(box, label, color=color)
     annotator.im.save(fname)  # save

@@ -165,7 +165,7 @@ class ConfusionMatrix:
         x = torch.where(iou > self.iou_thres)
         
         if x[0].shape[0]:
-            print(len(x))
+
             matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
