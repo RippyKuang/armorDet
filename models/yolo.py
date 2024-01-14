@@ -72,7 +72,7 @@ class Detect(nn.Module):
                 #预测的box的中心点x和y是相对位置, 在推理的时候,需要映射到原图上,因此需要先加上grid的坐标,再乘以stride映射回原图
                 if self.dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
-                self.grid[i]=self.grid[i].repeat(1,1,1,1,4)
+                    self.grid[i]=self.grid[i].repeat(1,1,1,1,4)
 
                 if isinstance(self, Segment):  # (boxes + masks)
                     xy, wh, conf, mask = x[i].split((2, 2, self.nc + 1, self.no - self.nc - 5), 4)

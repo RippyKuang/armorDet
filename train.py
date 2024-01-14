@@ -301,72 +301,63 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         if RANK in {-1, 0}:
             pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
         optimizer.zero_grad()
-        # for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-        #     callbacks.run('on_train_batch_start')
-        #     ni = i + nb * epoch  # number integrated batches (since train start)
-        #     imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+            callbacks.run('on_train_batch_start')
+            ni = i + nb * epoch  # number integrated batches (since train start)
+            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
-        #     # Warmup
-        #     if ni <= nw:
-        #         xi = [0, nw]  # x interp
-        #         # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
-        #         accumulate = max(1, np.interp(ni, xi, [1, nbs / batch_size]).round())
-        #         for j, x in enumerate(optimizer.param_groups):
-        #             # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
-        #             x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 0 else 0.0, x['initial_lr'] * lf(epoch)])
-        #             if 'momentum' in x:
-        #                 x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
+            # Warmup
+            if ni <= nw:
+                xi = [0, nw]  # x interp
+                # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
+                accumulate = max(1, np.interp(ni, xi, [1, nbs / batch_size]).round())
+                for j, x in enumerate(optimizer.param_groups):
+                    # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                    x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 0 else 0.0, x['initial_lr'] * lf(epoch)])
+                    if 'momentum' in x:
+                        x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
 
-        #     # Multi-scale
-        #     if opt.multi_scale:
-        #         sz = random.randrange(int(imgsz * 0.5), int(imgsz * 1.5) + gs) // gs * gs  # size
-        #         sf = sz / max(imgs.shape[2:])  # scale factor
-        #         if sf != 1:
-        #             ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-        #             imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+            # Multi-scale
+            if opt.multi_scale:
+                sz = random.randrange(int(imgsz * 0.5), int(imgsz * 1.5) + gs) // gs * gs  # size
+                sf = sz / max(imgs.shape[2:])  # scale factor
+                if sf != 1:
+                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
+                    imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
-        #     # Forward
-        #     with torch.cuda.amp.autocast(amp):
-        #         pred = model(imgs)  # 前向传播 3*[16, 3, 80, 80, 85] 16是bs, 3是三个anchor，8080是特征图大小,85是80+5
-        #         loss, loss_items = compute_loss(pred, targets.to(device))  # targets 形状是(n,6)，n是一个batch里所有gt box的数量，6的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h)
-        #         if RANK != -1:
-        #             loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-        #         if opt.quad:
-        #             loss *= 4.
+            # Forward
+            with torch.cuda.amp.autocast(amp):
+                pred = model(imgs)  # 前向传播 3*[16, 3, 80, 80, 85] 16是bs, 3是三个anchor，8080是特征图大小,85是80+5
+                loss, loss_items = compute_loss(pred, targets.to(device))  # targets 形状是(n,6)，n是一个batch里所有gt box的数量，6的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h)
+                if RANK != -1:
+                    loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
+                if opt.quad:
+                    loss *= 4.
 
-        #     # Backward
-        #     scaler.scale(loss).backward()
+            # Backward
+            scaler.scale(loss).backward()
 
-        #     # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
-        #     if ni - last_opt_step >= accumulate:
-        #         scaler.unscale_(optimizer)  # unscale gradients
-        #         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
-        #         scaler.step(optimizer)  # optimizer.step
-        #         scaler.update()
-        #         optimizer.zero_grad()
-        #         if ema:
-        #             ema.update(model)
-        #         last_opt_step = ni
+            # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+            if ni - last_opt_step >= accumulate:
+                scaler.unscale_(optimizer)  # unscale gradients
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
+                scaler.step(optimizer)  # optimizer.step
+                scaler.update()
+                optimizer.zero_grad()
+                if ema:
+                    ema.update(model)
+                last_opt_step = ni
 
-        #     # Log
-        #     if RANK in {-1, 0}:
-        #         mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
-        #         mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-        #         pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
-        #                              (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-        #         x_max=torch.max(targets[...,[2,4,6,8]],dim=-1,keepdim=True)[0]
-        #         x_min=torch.min(targets[...,[2,4,6,8]],dim=-1,keepdim=True)[0]
-        #         y_max=torch.max(targets[...,[3,5,7,9]],dim=-1,keepdim=True)[0]
-        #         y_min=torch.min(targets[...,[3,5,7,9]],dim=-1,keepdim=True)[0]
-        #         w_ = (x_max - x_min)
-        #         h_ = (y_max - y_min)
-        #         xy = torch.cat((torch.sum(targets[:,[2,4,6,8]],dim=-1,keepdim=True),torch.sum(targets[:,[3,5,7,9]],dim=-1,keepdim=True)),dim=1)/4 
-
-        #         targets = torch.cat((targets[...,:2],xy,w_,h_),dim=-1)
-        #         callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
-        #         if callbacks.stop_training:
-        #             return
-        #     # end batch ------------------------------------------------------------------------------------------------
+            # Log
+            if RANK in {-1, 0}:
+                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
+                pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
+                                     (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+                callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
+                if callbacks.stop_training:
+                    return
+            # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
         lr = [x['lr'] for x in optimizer.param_groups]  # for loggers
@@ -386,7 +377,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                                 single_cls=single_cls,
                                                 dataloader=val_loader,
                                                 save_dir=save_dir,
-                                                plots=False,
+                                                plots=True,
                                                 callbacks=callbacks,
                                                 compute_loss=compute_loss)
 

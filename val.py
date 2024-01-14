@@ -49,25 +49,15 @@ from utils.torch_utils import select_device, smart_inference_mode
 
 def save_one_txt(predn, save_conf, shape, file):
     # Save one txt result
-    gn = torch.tensor(shape)[[1, 0, 1, 0]]  # normalization gain whwh
+    gn = torch.tensor(shape).repeat(4)  # normalization gain whwh
     for *xyxy, conf, cls in predn.tolist():
-        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+        xy = (torch.tensor(xyxy).view(1, 8) / gn).view(-1).tolist()  # normalized xywh
+        line = (cls, *xy, conf) if save_conf else (cls, *xy)  # label format
         with open(file, 'a') as f:
             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
 
-def save_one_json(predn, jdict, path, class_map):
-    # Save one JSON result {"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}
-    image_id = int(path.stem) if path.stem.isnumeric() else path.stem
-    box = xyxy2xywh(predn[:, :4])  # xywh
-    box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
-    for p, b in zip(predn.tolist(), box.tolist()):
-        jdict.append({
-            'image_id': image_id,
-            'category_id': class_map[int(p[5])],
-            'bbox': [round(x, 3) for x in b],
-            'score': round(p[4], 5)})
+
 
 
 def process_batch(detections, labels, iouv):
@@ -114,7 +104,6 @@ def run(
         save_txt=False,  # save results to *.txt
         save_hybrid=False,  # save label+prediction hybrid results to *.txt
         save_conf=False,  # save confidences in --save-txt labels
-        save_json=False,  # save a COCO-JSON results file
         project=ROOT / 'runs/val',  # save to project/name
         name='exp',  # save to project/name
         exist_ok=False,  # existing project/name ok, do not increment
@@ -188,7 +177,7 @@ def run(
     names = model.names if hasattr(model, 'names') else model.module.names  # get class names
     if isinstance(names, (list, tuple)):  # old format
         names = dict(enumerate(names))
-    class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
+
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     dt = Profile(device=device), Profile(device=device), Profile(device=device)  # profiling times
@@ -226,13 +215,13 @@ def run(
                                         max_det=max_det)
 
         # Metrics
+    
         for si, pred in enumerate(preds_ep): #xyxyxyxy conf cls
             labels = targets[targets[:, 0] == si, 1:]  #cls xyxyxyxy
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
             path, shape = Path(paths[si]), shapes[si][0]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
             seen += 1
-
             if npr == 0:
                 if nl:
                     stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
@@ -254,20 +243,19 @@ def run(
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
                     confusion_matrix.process_batch(predn, labelsn)
-            stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
+            stats.append((correct, pred[:, 8], pred[:, 9], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
             # Save/log
             if save_txt:
                 (save_dir / 'labels').mkdir(parents=True, exist_ok=True)
                 save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / f'{path.stem}.txt')
-            if save_json:
-                save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
+         
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
 
         # Plot images
         if plots and batch_i < 3:
             plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
-            plot_images(im, output_to_target(preds), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
+            plot_images(im, output_to_target(preds_ep), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
 
         callbacks.run('on_val_batch_end', batch_i, im, targets, paths, shapes, preds)
 

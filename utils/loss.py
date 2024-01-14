@@ -112,6 +112,7 @@ class ComputeLoss:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  #m.nl为3, balance仍未[4.0, 1.0, 0.4]
         self.ssi = list(m.stride).index(16) if autobalance else 0  # det.stride是[ 8., 16., 32.]， self.ssi表示stride为16的索引，当autobalance为true时，self.ssi为1.
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
+        self.l1 = nn.L1Loss()
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
@@ -148,6 +149,7 @@ class ComputeLoss:
                 #pcls = 剩下80个分类
 
                 # Regression
+                lpts = self.l1(pep[...,:8], tbox[i][:,4:])
                 x_max=torch.max(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 x_min=torch.min(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 y_max=torch.max(pep[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
@@ -181,10 +183,6 @@ class ComputeLoss:
                     lcls += self.BCEcls(pcls, t)  # BCE
                     #self.cn和self.cp分别是标签平滑的负样本平滑标签和正样本平滑标签
 
-                # Append targets to text file
-                # with open('targets.txt', 'a') as file:
-                #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
-
             obji = self.BCEobj(pi[..., 8], tobj)
             lobj += obji * self.balance[i]  # obj loss
             if self.autobalance:
@@ -193,7 +191,7 @@ class ComputeLoss:
         if self.autobalance:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
         lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
+        lobj *= self.hyp['obj'] + lpts
         lcls *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 

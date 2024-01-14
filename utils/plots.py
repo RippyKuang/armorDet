@@ -49,6 +49,35 @@ class Colors:
 
 
 colors = Colors()  # create instance for 'from utils.plots import colors'
+class EP_Annotator(Annotator):
+    def __init__(self, im, line_width=None, font_size=None, font="Arial.ttf", pil=False, example="abc"):
+        super().__init__(im, line_width, font_size, font, pil, example)
+    def EP_box_label(self, box, label="", color=(128, 128, 128), txt_color=(255, 255, 255), rotated=False):
+        """Add one xyxy box to image with label."""
+        if isinstance(box, torch.Tensor):
+            box = box.tolist()
+        if self.pil:
+    
+            p1 = (box[0], box[1])
+            p2 = (box[2], box[3])
+            p3 = (box[4], box[5])
+            p4 = (box[6], box[7])
+
+            self.draw.line([p1,p2],color,self.lw)
+            self.draw.line([p2,p3],color,self.lw)
+            self.draw.line([p3,p4],color,self.lw)
+            self.draw.line([p4,p1],color,self.lw)
+            if label:
+                w, h = self.font.getsize(label)  # text width, height
+             
+                outside = p1[1] - h >= 0  # label fits outside box
+                self.draw.rectangle(
+                    (p3[0], p3[1] - h if outside else p3[1], p3[0] + w + 1, p3[1] + 1 if outside else p3[1] + h + 1),
+                    fill=color,
+                )
+                # self.draw.text((box[0], box[1]), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
+                self.draw.text((p3[0], p3[1] - h if outside else p3[1]), label, fill=txt_color, font=self.font)
+
 
 
 def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/detect/exp')):
@@ -103,17 +132,17 @@ def butter_lowpass_filtfilt(data, cutoff=1500, fs=50000, order=5):
     return filtfilt(b, a, data)  # forward-backward filter
 
 
-def output_to_target(output, max_det=300):
+def output_to_target(output, max_det=30):  #xyxyxyxy conf cls
     # Convert model output to target format [batch_id, class_id, x, y, w, h, conf] for plotting
     targets = []
     for i, o in enumerate(output):
-        box, conf, cls = o[:max_det, :6].cpu().split((4, 1, 1), 1)
+        box, conf, cls = o[:max_det, :10].cpu().split((8, 1, 1), 1)
         j = torch.full((conf.shape[0], 1), i)
-        targets.append(torch.cat((j, cls, xyxy2xywh(box), conf), 1))
+        targets.append(torch.cat((j, cls, box, conf), 1))
     return torch.cat(targets, 0).numpy()
 
 
-@threaded
+
 def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
     # Plot image grid with labels
     if isinstance(images, torch.Tensor):
@@ -147,34 +176,34 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
 
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
-    annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True, example=names)
+    annotator = EP_Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True, example=names)
     for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
         if paths:
             annotator.text([x + 5, y + 5], text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
-        if len(targets) > 0:
+        if len(targets) > 0: #ic xyxyxyxy
             ti = targets[targets[:, 0] == i]  # image targets
-            boxes = xywh2xyxy(ti[:, 2:6]).T
+            boxes = ti[:, 2:]
             classes = ti[:, 1].astype('int')
-            labels = ti.shape[1] == 6  # labels if no conf column
-            conf = None if labels else ti[:, 6]  # check for confidence presence (label vs pred)
+            labels = ti.shape[1] == 10  # labels if no conf column
+            conf = None if labels else ti[:, -1]  # check for confidence presence (label vs pred)
 
             if boxes.shape[1]:
                 if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
-                    boxes[[0, 2]] *= w  # scale to pixels
-                    boxes[[1, 3]] *= h
+                    boxes[:,[0, 2, 4, 6]] *= w  # scale to pixels
+                    boxes[:,[1, 3, 5, 7]] *= h
                 elif scale < 1:  # absolute coords need scale if image scales
                     boxes *= scale
-            boxes[[0, 2]] += x
-            boxes[[1, 3]] += y
-            for j, box in enumerate(boxes.T.tolist()):
+            boxes[:,[0, 2, 4, 6]] += x
+            boxes[:,[1, 3, 5, 7]] += y
+            for j, box in enumerate(boxes.tolist()):
                 cls = classes[j]
                 color = colors(cls)
                 cls = names[cls] if names else cls
                 if labels or conf[j] > 0.25:  # 0.25 conf thresh
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
-                    annotator.box_label(box, label, color=color)
+                    annotator.EP_box_label(box, label, color=color)
     annotator.im.save(fname)  # save
 
 

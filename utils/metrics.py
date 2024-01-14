@@ -157,13 +157,15 @@ class ConfusionMatrix:
                 self.matrix[self.nc, gc] += 1  # background FN
             return
 
-        detections = detections[detections[:, 4] > self.conf]
+        detections = detections[detections[:, 8] > self.conf]
         gt_classes = labels[:, 0].int()
-        detection_classes = detections[:, 5].int()
-        iou = box_iou(labels[:, 1:], detections[:, :4])
+        detection_classes = detections[:, 9].int()
+        iou = box_iou(labels[:, 1:], detections[:, :8])
 
         x = torch.where(iou > self.iou_thres)
+        
         if x[0].shape[0]:
+            print(len(x))
             matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
