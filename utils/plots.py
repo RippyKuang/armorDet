@@ -91,7 +91,7 @@ def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/detec
     if ('Detect'
             not in module_type) and ('Segment'
                                      not in module_type):  # 'Detect' for Object Detect task,'Segment' for Segment task
-        batch, channels, height, width = x.shape  # batch, channels, height, width
+        _, channels, height, width = x.shape  # batch, channels, height, width
         if height > 1 and width > 1:
             f = save_dir / f"stage{stage}_{module_type.split('.')[-1]}_features.png"  # filename
 
@@ -188,7 +188,8 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
             classes = ti[:, 1].astype('int')
             labels = ti.shape[1] == 10  # labels if no conf column
             conf = None if labels else ti[:, -1]  # check for confidence presence (label vs pred)
-
+            if boxes.shape[0]==0:
+                continue
             if boxes.shape[1]:
                 if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
                     boxes[:,[0, 2, 4, 6]] *= w  # scale to pixels
@@ -202,7 +203,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
                 cls = classes[j]
                 color = colors(cls)
                 cls = names[cls] if names else cls
-                if labels or conf[j] > 0.8:  # 0.25 conf thresh
+                if labels or conf[j] > 0.3:  # 0.25 conf thresh
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.EP_box_label(box, label, color=color)
     annotator.im.save(fname)  # save

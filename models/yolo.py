@@ -74,15 +74,10 @@ class Detect(nn.Module):
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
                     self.grid[i]=self.grid[i].repeat(1,1,1,1,4)
 
-                if isinstance(self, Segment):  # (boxes + masks)
-                    xy, wh, conf, mask = x[i].split((2, 2, self.nc + 1, self.no - self.nc - 5), 4)
-                    xy = (xy.sigmoid() * 2 + self.grid[i]) * self.stride[i]  # xy
-                    wh = (wh.sigmoid() * 2) ** 2 * self.anchor_grid[i]  # wh
-                    y = torch.cat((xy, wh, conf.sigmoid(), mask), 4)
-                else:  # Detect (boxes only)
-                    ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
-                    xy = (ep * 2 + self.grid[i]) * self.stride[i]  # xy
-                    y = torch.cat((xy, conf), -1)
+               
+                ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
+                xy = (ep * 2 + self.grid[i]) * self.stride[i]  # xy
+                y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 
         return x if self.training else (torch.cat(z, 1), ) if self.export else (torch.cat(z, 1), x)

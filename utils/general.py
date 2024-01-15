@@ -976,9 +976,7 @@ def non_max_suppression(
         x = torch.cat((box, conf, j.float()), 1)[thres_] #0-3是box，4是置信度，5是类别
         x_ep = torch.cat((_x[:, :8], conf,j.float()),1)[thres_]
         # 从这里开始x的格式都是xyxy
-        # Filter by class
-        if classes is not None:   #筛选出指定的class，nms仅仅对指定的class进行nms。
-            x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
+        
 
         # Apply finite constraint
         # if not torch.isfinite(x).all():

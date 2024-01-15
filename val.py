@@ -20,7 +20,7 @@ Usage - formats:
 """
 
 import argparse
-import json
+
 import os
 import subprocess
 import sys
@@ -70,11 +70,8 @@ def process_batch(detections, labels, iouv):
     Returns:
         correct (array[N, 10]), for 10 IoU levels
     """
-
     correct = np.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
-
-    lpts = torch.nn.L1Loss(reduction='sum')(labels[:, 1:],detections[0][:8])
-    iou = box_iou(labels[:, 1:], detections[:, :8])*0.2+0.8*torch.sqrt(lpts).sigmoid()
+    iou = detections[:,8].repeat(labels.shape[0],1)
     correct_class = labels[:, 0:1] == detections[:, -1]
     for i in range(len(iouv)):
         x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
@@ -83,7 +80,6 @@ def process_batch(detections, labels, iouv):
             if x[0].shape[0] > 1:
                 matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-                # matches = matches[matches[:, 2].argsort()[::-1]]
                 matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
             correct[matches[:, 1].astype(int), i] = True
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
@@ -185,7 +181,7 @@ def run(
     tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     dt = Profile(device=device), Profile(device=device), Profile(device=device)  # profiling times
     loss = torch.zeros(3, device=device)
-    jdict, stats, ap, ap_class = [], [], [], []
+    stats, ap, ap_class = [], [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -256,7 +252,7 @@ def run(
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
 
         # Plot images
-        if plots and batch_i < 3:
+        if plots and batch_i < 50:
             plot_images(im, targets, paths, save_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
             plot_images(im, output_to_target(preds_ep), paths, save_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
 
@@ -275,7 +271,7 @@ def run(
     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
         LOGGER.warning(f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
- 
+
     # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(ap_class):
