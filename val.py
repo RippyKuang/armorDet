@@ -70,8 +70,11 @@ def process_batch(detections, labels, iouv):
     Returns:
         correct (array[N, 10]), for 10 IoU levels
     """
+
     correct = np.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
-    iou = box_iou(labels[:, 1:], detections[:, :8])
+
+    lpts = torch.nn.L1Loss(reduction='sum')(labels[:, 1:],detections[0][:8])
+    iou = box_iou(labels[:, 1:], detections[:, :8])*0.2+0.8*torch.sqrt(lpts).sigmoid()
     correct_class = labels[:, 0:1] == detections[:, -1]
     for i in range(len(iouv)):
         x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
@@ -272,7 +275,7 @@ def run(
     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
     if nt.sum() == 0:
         LOGGER.warning(f'WARNING ⚠️ no labels found in {task} set, can not compute metrics without labels')
-
+ 
     # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(ap_class):

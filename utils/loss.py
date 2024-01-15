@@ -3,6 +3,7 @@
 Loss functions
 """
 
+from math import sqrt
 import torch
 import torch.nn as nn
 
@@ -143,14 +144,15 @@ class ComputeLoss:
             lpts= 0
             if n:
                 #pi[b, a, gj, gi] shape 712,85
-                pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
+                pep, conf, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
                
                 #peh=pi[:, 2:4]
                 #_=pi[:, 4:5] 置信度
                 #pcls = 剩下80个分类
 
                 # Regression
-                lpts += self.l1(pep[...,:8], tbox[i][:,4:])
+                iconf = conf.argmax() 
+                lpts += torch.sqrt(self.l1(pep[iconf][...,:8], tbox[i][iconf][...,4:]))
                 x_max=torch.max(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 x_min=torch.min(pep[...,[0,2,4,6]],dim=-1,keepdim=True)[0]
                 y_max=torch.max(pep[...,[1,3,5,7]],dim=-1,keepdim=True)[0]
@@ -165,7 +167,7 @@ class ComputeLoss:
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 #计算808个预测框与gt box的iou loss
                 iou = bbox_iou(pbox, tbox[i][:,:4]).squeeze()  # iou(prediction, target)
-                lbox += 0.2*(1.0 - iou).mean() + 0.8*lpts.sigmoid()  # iou loss
+                lbox +=(1.0 - iou).mean() + lpts # iou loss
               
 
                 # Objectness
