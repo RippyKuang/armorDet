@@ -76,7 +76,7 @@ class Detect(nn.Module):
 
                
                 ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
-                xy = (ep * 2 + self.grid[i]) * self.stride[i]  # xy
+                xy = (ep * 2 + self.grid[i]-0.5) * self.stride[i]  # xy
                 y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 

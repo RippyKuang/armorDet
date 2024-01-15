@@ -132,7 +132,7 @@ class ComputeLoss:
         lcls = torch.zeros(1, device=self.device)  # class loss
         lbox = torch.zeros(1, device=self.device)  # box loss
         lobj = torch.zeros(1, device=self.device)  # object loss
-        tcls, tbox, indices, _ = self.build_targets(p, targets)  # 四个参数什么意思见最下面
+        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # 四个参数什么意思见最下面
         #indices里的是坐标，tbox里的是偏移量 
         # Losses
         for i, pi in enumerate(p):  # layer index, layer predictions
@@ -148,13 +148,13 @@ class ComputeLoss:
                 pep = pep.sigmoid() * 2 - 0.5 #将预测的点坐标变换到-0.5到1.5之间
 
                 iou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
-                lpts = torch.sqrt(torch.sum(torch.abs(pep-tbox[i]),dim=-1)).mean()/8
+                lpts = torch.sum(torch.abs(pep-tbox[i]),dim=-1)/64
 
-                lbox += (1.0 - iou).mean() +lpts # iou loss
+                lbox += (1.0 - iou).mean() +lpts.mean() # iou loss
                 
                 iou = iou.detach().clamp(0).type(tobj.dtype)
                 lpts = lpts.detach().type(tobj.dtype) 
-                tobj[b, a, gj, gi] += 0.2*iou+ 0.8*(2-2*(lpts.sigmoid()))  # iou ratio
+                tobj[b, a, gj, gi] = 0.2*iou+ 0.8*(2-2*lpts.sigmoid())  # iou ratio
 
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     #pcls shape:(808,80)
@@ -162,7 +162,7 @@ class ComputeLoss:
                     t[range(n), tcls[i]] = self.cp   #构造独热码
                     lcls += self.BCEcls(pcls, t)  # BCE
 
-            obji = self.BCEobj(pi[..., 8].sigmoid(), tobj) 
+            obji = self.BCEobj(pi[..., 8], tobj) 
             lobj += obji * self.balance[i]# obj loss
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
