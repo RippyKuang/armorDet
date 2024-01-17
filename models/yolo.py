@@ -76,7 +76,10 @@ class Detect(nn.Module):
 
                
                 ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
-                xy = (ep * 2 + self.grid[i]-0.5) * self.stride[i]  # xy
+
+                # 这里源码只是乘以二再加上格点坐标，再乘以步长
+                # 这个grid其实是分好的格点（em有点表达不清楚）
+                xy = (ep * 2 + self.grid[i]) * self.stride[i]  # xy
                 y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 

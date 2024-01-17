@@ -180,8 +180,12 @@ def run(
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     dt = Profile(device=device), Profile(device=device), Profile(device=device)  # profiling times
+
+    # 乐，这里是三个位置给损失么
     loss = torch.zeros(3, device=device)
+    # 这是啥？
     stats, ap, ap_class = [], [], []
+
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -200,7 +204,7 @@ def run(
 
         # Loss
         if compute_loss:
-            loss += compute_loss(train_out, targets)[1]  # box, obj, cls
+            loss += compute_loss(train_out, targets)[1][:3]  # box, obj, cls
 
         # NMS
         targets[:, 2:] *= torch.tensor((width, height), device=device).repeat(4)  # to pixels
