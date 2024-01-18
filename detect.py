@@ -141,8 +141,8 @@ def run(
             else:
                 pred = model(im, augment=augment, visualize=visualize)
         # NMS
-        with dt[2]:
-            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        with dt[2]: # 此时pred有十位，前八位为xyxyxyxy，然后是概率，类别
+            _, pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
 
         # Second-stage classifier (optional)
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
@@ -177,38 +177,51 @@ def run(
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
                 # Rescale boxes from img_size to im0 size
-                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
+                det[:, :8] = scale_boxes(im.shape[2:], det[:, :8], im0.shape).round()
 
                 # Print results
-                for c in det[:, 5].unique():
-                    n = (det[:, 5] == c).sum()  # detections per class
-                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                # for c in det[:, 5].unique():
+                #     n = (det[:, 5] == c).sum()  # detections per class
+                #     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
-                for *xyxy, conf, cls in reversed(det):
+                for *xyxyxyxy, conf, cls in reversed(det):
                     c = int(cls)  # integer class
                     label = names[c] if hide_conf else f'{names[c]}'
-                    confidence = float(conf)
-                    confidence_str = f'{confidence:.2f}'
+                    confidence = round(float(conf.item()), 2)
 
-                    if save_csv:
-                        write_to_csv(p.name, label, confidence_str)
+                    p1 = list(map(int, xyxyxyxy[0: 2]))
+                    p2 = list(map(int, xyxyxyxy[2: 4]))
+                    p3 = list(map(int, xyxyxyxy[4: 6]))
+                    p4 = list(map(int, xyxyxyxy[6: 8]))
 
-                    if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                        with open(f'{txt_path}.txt', 'a') as f:
-                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                    cv2.line(im0, p1, p2, color=(0, 255, 0), thickness=1)
+                    cv2.line(im0, p2, p3, color=(0, 255, 0), thickness=1)
+                    cv2.line(im0, p3, p4, color=(0, 255, 0), thickness=1)
+                    cv2.line(im0, p4, p1, color=(0, 255, 0), thickness=1)
+                    
+                    cv2.putText(im0, label, [p1[0] - 10, p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
+                    cv2.putText(im0, str(confidence), [p1[0], p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
 
-                    if save_img or save_crop or view_img:  # Add bbox to image
-                        c = int(cls)  # integer class
-                        label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
-                        annotator.box_label(xyxy, label, color=colors(c, True))
-                    if save_crop:
-                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                    # confidence_str = f'{confidence:.2f}'
+                    # if save_csv:
+                    #     write_to_csv(p.name, label, confidence_str)
+                    #
+                    # if save_txt:  # Write to file
+                    #     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    #     line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                    #     with open(f'{txt_path}.txt', 'a') as f:
+                    #         f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                    #
+                    # if save_img or save_crop or view_img:  # Add bbox to image
+                    #     c = int(cls)  # integer class
+                    #     label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                    #     annotator.box_label(xyxy, label, color=colors(c, True))
+                    # if save_crop:
+                    #     save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
             # Stream results
-            im0 = annotator.result()
+            # im0 = annotator.result()
             if view_img:
                 if platform.system() == 'Linux' and p not in windows:
                     windows.append(p)
@@ -251,12 +264,12 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path or triton URL')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'best.pt', help='model path or triton URL')
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/screen/0(webcam)')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/test.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
+    parser.add_argument('--conf-thres', type=float, default=0.5, help='confidence threshold')
+    parser.add_argument('--iou-thres', type=float, default=0.2, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='show results')

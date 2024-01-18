@@ -49,6 +49,21 @@ for orientation in ExifTags.TAGS.keys():
     if ExifTags.TAGS[orientation] == 'Orientation':
         break
 
+def xyxyxyxyn2xyxyxyxy(x, w=640, h=640, padw=0, padh=0):
+    y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
+    # x坐标乘以w加偏置
+    y[..., 0] = w * x[..., 0] + padw
+    y[..., 2] = w * x[..., 2] + padw
+    y[..., 4] = w * x[..., 4] + padw
+    y[..., 6] = w * x[..., 6] + padw
+
+    # y坐标乘以h加偏置
+    y[..., 1] = h * x[..., 1] + padh
+    y[..., 3] = h * x[..., 3] + padh
+    y[..., 5] = h * x[..., 5] + padh
+    y[..., 7] = h * x[..., 7] + padh
+    return y
+
 
 def get_hash(paths):
     # Returns a single hash value of a list of paths (files or dirs)
@@ -493,12 +508,13 @@ class LoadImagesAndLabels(Dataset):
 
         try:
             f = []  # image files
+            # 处理好几个路径
             for p in path if isinstance(path, list) else [path]:
                 p = Path(p)  # os-agnostic
                 if p.is_dir():  # dir
                     f += glob.glob(str(p / '**' / '*.*'), recursive=True)
                     # f = list(p.rglob('*.*'))  # pathlib
-                elif p.is_file():  # file
+                elif p.is_file():  # file 如果是文件就把他parent路径加进来
                     with open(p) as t:
                         t = t.read().strip().splitlines()
                         parent = str(p.parent) + os.sep
@@ -513,7 +529,7 @@ class LoadImagesAndLabels(Dataset):
             raise Exception(f'{prefix}Error loading data from {path}: {e}\n{HELP_URL}') from e
 
         # Check cache
-        self.label_files = img2label_paths(self.im_files)  # 根据图片路径找到标签路径，也是绝对路径
+        self.label_files = img2label_paths(self.im_files)  # 摔跌改了这里的函数，使得图片和标签可以放在一个目录里
         cache_path = (p if p.is_file() else Path(self.label_files[0]).parent).with_suffix('.cache') #把缓存文件放到label文件夹下面，并加上cache后缀
         try:
             cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # 加载缓存
@@ -540,8 +556,9 @@ class LoadImagesAndLabels(Dataset):
 
         # Read cache
         [cache.pop(k) for k in ('hash', 'version', 'msgs')]  # remove items
+        # 这个zip怎么就返回这么多了？？？
         labels, shapes, self.segments = zip(*cache.values())
-        #label就是gt box的信息，包括类别的坐标。 shapes是图像宽高信息。 segments都是空。
+        #label就是gt box的信息，包括类别的坐标，更改后为9=1+8。 shapes是图像宽高信息。 segments都是空。
         nl = len(np.concatenate(labels, 0))  # label的数目, 增加一个副样本
         assert nl > 0 or not augment, f'{prefix}All labels empty in {cache_path}, can not start training. {HELP_URL}'
         self.labels = list(labels)
@@ -557,7 +574,7 @@ class LoadImagesAndLabels(Dataset):
             self.label_files = [self.label_files[i] for i in include]
             self.labels = [self.labels[i] for i in include]
             self.segments = [self.segments[i] for i in include]
-            self.shapes = self.shapes[include]  # wh
+            self.shapes = self.shapes[include]  # wh 这里shapes拿到的是训练集图像的原始宽高，如640*480
 
         # Create indices
         n = len(self.shapes)  # number of images
@@ -567,7 +584,7 @@ class LoadImagesAndLabels(Dataset):
         self.n = n
         self.indices = np.arange(n)
 
-        # Update labels
+        # Update labels 没看懂，但感觉不重要
         include_class = []  # filter labels to include only these classes (optional)
         self.segments = list(self.segments)
         include_class_array = np.array(include_class).reshape(1, -1)
@@ -693,7 +710,8 @@ class LoadImagesAndLabels(Dataset):
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        if False:   #使用mosaic数据增强
+        # mosaic数据增强
+        if mosaic:   #使用mosaic数据增强
             # Load mosaic
             img, labels = self.load_mosaic(index) #load_mosaic将随机选取4张图片组合成一张图片
             shapes = None
@@ -730,6 +748,7 @@ class LoadImagesAndLabels(Dataset):
         if nl:
             labels[:, 1:] = xyxyxyxyn(labels[:, 1:], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
+        # 别的数据增强
         if self.augment:
             # Albumentations
             img, labels = self.albumentations(img, labels)
@@ -742,14 +761,14 @@ class LoadImagesAndLabels(Dataset):
             if random.random() < hyp['flipud']:
                 img = np.flipud(img)
                 if nl:
-                    labels[:, 2] = 1 - labels[:, 2]
-
+                    # labels[:, 2] = 1 - labels[:, 2]
+                    labels[:, [2, 4, 6, 8]] = 1 - labels[:, [2, 4, 6, 8]]
             # Flip left-right
             if random.random() < hyp['fliplr']:
                 img = np.fliplr(img)
                 if nl:
-                    labels[:, 1] = 1 - labels[:, 1]
-
+                    # labels[:, 1] = 1 - labels[:, 1]
+                    labels[:, [1, 3, 5, 7]] = 1 - labels[:, [1, 3, 5, 7]]
             # Cutouts
             # labels = cutout(img, labels, p=0.5)
             # nl = len(labels)  # update after cutout
@@ -790,16 +809,20 @@ class LoadImagesAndLabels(Dataset):
     def load_mosaic(self, index):
         # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
         labels4, segments4 = [], []
+        # s应该就是640
         s = self.img_size
+        # 获取随机的中心点，从点A（s/2, s/2）和点B（3s/2, 3s/2）限定的矩形内随机选择一点作为拼接点
         yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
+        # 再选三张图的索引？
         indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
         random.shuffle(indices)
         for i, index in enumerate(indices):
-            # Load image
+            # Load image 加载图片，分四次进行，得到的是图片加原来的宽高
             img, _, (h, w) = self.load_image(index)
 
-            # place img in img4
+            # place img in img4 获取四张图片在im4上的放置位置
             if i == 0:  # top left
+                # 填充一个2s * 2s大小的图片，值为114
                 img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
                 x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
@@ -817,22 +840,28 @@ class LoadImagesAndLabels(Dataset):
             padw = x1a - x1b
             padh = y1a - y1b
 
-            # Labels
+            # Labels labels是数据集里的标签
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
             if labels.size:
-                labels[:, 1:] = format_(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
+                # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
+                # 需要将xyxyxyxy从相对坐标转化为绝对坐标
+                labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
                 segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
             labels4.append(labels)
             segments4.extend(segments)
 
         # Concat/clip labels
-        labels4 = np.concatenate(labels4, 0)   #形状为 (4,9)
+        # 形状为 (4,9)
+        labels4 = np.concatenate(labels4, 0)
         for x in (labels4[:, 1:], *segments4):
+            # clip函数用于截断输入，将坐标限制在2s内
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
         # Augment
+        # 搞定
         img4, labels4, segments4 = copy_paste(img4, labels4, segments4, p=self.hyp['copy_paste'])
+
         img4, labels4 = random_perspective(img4,
                                            labels4,
                                            segments4,

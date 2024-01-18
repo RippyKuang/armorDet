@@ -71,12 +71,9 @@ class EP_Annotator(Annotator):
                 w, h = self.font.getsize(label)  # text width, height
              
                 outside = p1[1] - h >= 0  # label fits outside box
-                self.draw.rectangle(
-                    (p3[0], p3[1] - h if outside else p3[1], p3[0] + w + 1, p3[1] + 1 if outside else p3[1] + h + 1),
-                    fill=color,
-                )
+              
                 # self.draw.text((box[0], box[1]), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
-                self.draw.text((p3[0], p3[1] - h if outside else p3[1]), label, fill=txt_color, font=self.font)
+                self.draw.text((p3[0]+w, p3[1] + h if outside else p3[1]), label, fill=None, font=self.font)
 
 
 
@@ -175,7 +172,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None):
         mosaic = cv2.resize(mosaic, tuple(int(x * ns) for x in (w, h)))
 
     # Annotate
-    fs = int((h + w) * ns * 0.01)  # font size
+    fs = int((h + w) * ns * 0.005)  # font size
     annotator = EP_Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True, example=names)
     for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin

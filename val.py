@@ -71,8 +71,8 @@ def process_batch(detections, labels, iouv):
         correct (array[N, 10]), for 10 IoU levels
     """
     correct = np.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
-    iou = detections[:,8].repeat(labels.shape[0],1)
-    correct_class = labels[:, 0:1] == detections[:, -1]
+    iou = box_iou(labels[:, 1:], detections[:, :8])
+    correct_class = labels[:, 0:1] == detections[:, 9]
     for i in range(len(iouv)):
         x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
         if x[0].shape[0]:
@@ -112,6 +112,7 @@ def run(
         dataloader=None,
         save_dir=Path(''),
         plots=True,
+        save_json=False,
         callbacks=Callbacks(),
         compute_loss=None,
 ):
@@ -180,7 +181,7 @@ def run(
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     dt = Profile(device=device), Profile(device=device), Profile(device=device)  # profiling times
-    loss = torch.zeros(3, device=device)
+    loss = torch.zeros(4, device=device)
     stats, ap, ap_class = [], [], []
     callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar

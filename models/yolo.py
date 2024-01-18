@@ -73,10 +73,11 @@ class Detect(nn.Module):
                 if self.dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
                     self.grid[i]=self.grid[i].repeat(1,1,1,1,4)
+                    self.anchor_grid[i]=self.anchor_grid[i].repeat(1,1,1,1,4)
 
                
                 ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
-                xy = (ep * 2 + self.grid[i]-0.5) * self.stride[i]  # xy
+                xy = (2*self.anchor_grid[i]*(ep * 2 - 0.5)+self.grid[i])*self.stride[i]
                 y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 
@@ -88,8 +89,8 @@ class Detect(nn.Module):
         shape = 1, self.na, ny, nx, 2  # grid shape
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
         yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)  # torch>=0.7 compatibility
-        grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
-        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
+        grid = torch.stack((xv, yv), 2).expand(shape)  # add grid offset, i.e. y = 2.0 * x - 0.5
+        anchor_grid = (self.anchors[i]).view((1, self.na, 1, 1, 2)).expand(shape)
         return grid, anchor_grid
 
 

@@ -113,7 +113,7 @@ class ComputeLoss:
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  #m.nl为3, balance仍未[4.0, 1.0, 0.4]
         self.ssi = list(m.stride).index(16) if autobalance else 0  # det.stride是[ 8., 16., 32.]， self.ssi表示stride为16的索引，当autobalance为true时，self.ssi为1.
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
-        self.l1 = nn.L1Loss(reduction='sum')
+        self.l1 = nn.SmoothL1Loss(reduction='mean')
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
@@ -132,6 +132,7 @@ class ComputeLoss:
         lcls = torch.zeros(1, device=self.device)  # class loss
         lbox = torch.zeros(1, device=self.device)  # box loss
         lobj = torch.zeros(1, device=self.device)  # object loss
+        lpts_sum = torch.zeros(1, device=self.device)  # object loss
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # 四个参数什么意思见最下面
         #indices里的是坐标，tbox里的是偏移量 
         # Losses
@@ -140,23 +141,24 @@ class ComputeLoss:
             b, a, gj, gi = indices[i]  # image index,anchor index，预测该gt box的网格y坐标，预测该gt box的网格x坐标。
             tobj = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)  # target obj
             #tobj shape: torch.Size([16, 3, 80, 80])
-            #pi shape： torch.Size([16, 3, 80, 80, 85])
+            #pi shape： torch.Size([16, 3, 80, 80, 85]) 8 16 32
             n = b.shape[0]  # number of targets 下文中的712
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
-                pep = pep.sigmoid() * 2 - 0.5 #将预测的点坐标变换到-0.5到1.5之间
+                pep = 2*anchors[i].repeat(1,4)*(pep.sigmoid() * 2 - 0.5) #将预测的点坐标变换到-0.5到1.5之间
 
-                iou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
-                lpts = torch.sum(torch.abs(pep-tbox[i]),dim=-1)/64
+                ciou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
+                iou = bbox_iou(pep,tbox[i],xywh=False).squeeze().detach()
 
-                lbox += (1.0 - iou).mean() +lpts.mean() # iou loss
-                
-                iou = iou.detach().clamp(0).type(tobj.dtype)
-                lpts = lpts.detach().type(tobj.dtype) 
-                tobj[b, a, gj, gi] = 0.2*iou+ 0.8*(2-2*lpts.sigmoid())  # iou ratio
+                lpts =  self.l1(pep,tbox[i])*(2**i)
+                lbox += (1.0 - ciou).mean()*(1-iou).mean() +lpts*(iou.mean()) # iou loss
+                lpts_sum +=torch.sum(torch.abs(pep-tbox[i]),dim=-1).mean()*(2**i)
+                ciou = ciou.detach().clamp(0).type(tobj.dtype)
+              
+                tobj[b, a, gj, gi] = ciou  # iou ratio
 
-                if self.nc > 1:  # cls loss (only if multiple classes)
+                if self.nc > 1:  # cls loss (only if multiple classes) 
                     #pcls shape:(808,80)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
                     t[range(n), tcls[i]] = self.cp   #构造独热码
@@ -174,7 +176,7 @@ class ComputeLoss:
         lcls *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 
-        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls)).detach()
+        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls,lpts_sum)).detach()
 
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
@@ -209,7 +211,7 @@ class ComputeLoss:
             # Match targets to anchors
             #2：10代表target里的xyxyxyxy,因为是归一化后的,所以需要乘上xyxy来恢复原先的尺度
             t = targets * gain  # target shape(3,n,11)
-            ep=[]
+    
             if nt:  #nt是gt box的数量
                 # Matches
                 x_max=torch.max(t[...,[2,4,6,8]],dim=2,keepdim=True)[0]
