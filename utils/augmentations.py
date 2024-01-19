@@ -151,8 +151,6 @@ def random_perspective(im,
                        shear=10,
                        perspective=0.0,
                        border=(0, 0)):
-    # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(0.1, 0.1), scale=(0.9, 1.1), shear=(-10, 10))
-    # targets = [cls, xyxy]
 
     height = im.shape[0] + border[0] * 2  # shape(h,w,c)
     width = im.shape[1] + border[1] * 2
@@ -162,11 +160,6 @@ def random_perspective(im,
     C[0, 2] = -im.shape[1] / 2  # x translation (pixels)
     C[1, 2] = -im.shape[0] / 2  # y translation (pixels)
 
-    # Perspective 透视变换
-    # P = np.eye(3)
-    # P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
-    # P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
-
     # Rotation and Scale 旋转和缩放，旋转就不要了，设为0，缩放是xy方向等比例缩放这个保留
     R = np.eye(3)
     a = random.uniform(-degrees, degrees)
@@ -174,11 +167,6 @@ def random_perspective(im,
     s = random.uniform(1 - scale, 1 + scale)
     # s = 2 ** random.uniform(-scale, scale)
     R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
-
-    # Shear 剪切 这东西感觉跟透视变换差不多，不保留
-    # S = np.eye(3)
-    # S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
-    # S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
 
     # Translation 平移
     T = np.eye(3)
@@ -194,11 +182,7 @@ def random_perspective(im,
         else:  # affine
             im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
 
-    # Visualize
-    # import matplotlib.pyplot as plt
-    # ax = plt.subplots(1, 2, figsize=(12, 6))[1].ravel()
-    # ax[0].imshow(im[:, :, ::-1])  # base
-    # ax[1].imshow(im2[:, :, ::-1])  # warped
+
 
     # Transform label coordinates
     n = len(targets)
@@ -226,20 +210,10 @@ def random_perspective(im,
             xy[:, [0, 2, 4, 6]] = xy[:, [0, 2, 4, 6]].clip(0, width)
             xy[:, [1, 3, 5, 7]] = xy[:, [1, 3, 5, 7]].clip(0, height)
 
-            # # 保存变换后的所有xy坐标
-            # shadow = xy
-            #
-            # # create new boxes
-            # x = xy[:, [0, 2, 4, 6]]
-            # y = xy[:, [1, 3, 5, 7]]
-            # new = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
-            #
-            # # clip
-            # new[:, [0, 2]] = new[:, [0, 2]].clip(0, width)
-            # new[:, [1, 3]] = new[:, [1, 3]].clip(0, height)
+
 
         # filter candidates
-        i = box_candidates(box1=targets[:, [1, 2, 5, 6]].T * s, box2=xy[:, [0, 1, 4, 5]].T, area_thr=0.01 if use_segments else 0.10)
+        i = box_candidates(box1=xyxyxyxy2xywh(targets[:, 1:] * s), box2=xyxyxyxy2xywh(xy), area_thr=0.01 if use_segments else 0.10)
         targets = targets[i]
         targets[:, 1:] = xy[i]
 
@@ -397,21 +371,21 @@ def mixup(im, labels, im2, labels2):
     return im, labels
 
 
-# def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
-#     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
-#
-#     w1, h1 = box1[:,2],box1[:,3]
-#     w2, h2 = box2[:,2],box2[:,3]
-#     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
-#     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
-
-
 def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
-    w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
-    w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+
+    w1, h1 = box1[:,2],box1[:,3]
+    w2, h2 = box2[:,2],box2[:,3]
     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
+
+
+# def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):  # box1(4,n), box2(4,n)
+#     # Compute candidate boxes: box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
+#     w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
+#     w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+#     ar = np.maximum(w2 / (h2 + eps), h2 / (w2 + eps))  # aspect ratio
+#     return (w2 > wh_thr) & (h2 > wh_thr) & (w2 * h2 / (w1 * h1 + eps) > area_thr) & (ar < ar_thr)  # candidates
 
 
 def classify_albumentations(

@@ -146,7 +146,7 @@ class ComputeLoss:
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
-                pep = 2*anchors[i].repeat(1,4)*(pep.sigmoid() * 2 - 0.5) #将预测的点坐标变换到-0.5到1.5之间
+                pep = 2*anchors[i].repeat(1,4)*(pep.sigmoid() * 2 - 1) #将预测的点坐标变换到-1到1之间
 
                 ciou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
                 iou = bbox_iou(pep,tbox[i],xywh=False).squeeze().detach()
