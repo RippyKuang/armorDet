@@ -27,7 +27,7 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto)
+                           GhostBottleneck, GhostConv, Proto,SE)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -77,7 +77,7 @@ class Detect(nn.Module):
 
                
                 ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
-                xy = (2*self.anchor_grid[i]*(ep * 2 - 1)+self.grid[i])*self.stride[i]
+                xy = (2*self.anchor_grid[i]*(ep * 2 - 0.5)+self.grid[i])*self.stride[i]
                 y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 
@@ -328,7 +328,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in {
                 Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x}:
+                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE}:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, ch_mul)

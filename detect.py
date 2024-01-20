@@ -116,6 +116,13 @@ def run(
 
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
+    dump_input = torch.ones(1,3,224,224).to(device)
+
+
+    # with torch.autograd.profiler.profile(enabled=True, use_cuda=True, record_shapes=False, profile_memory=False) as prof:
+    #     outputs = model(dump_input)
+    # print(prof.table())
+    # prof.export_chrome_trace('./profile.json')
     seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
     for path, im, im0s, vid_cap, s in dataset: #path是图片的绝对路径 im0s是原图，im是缩放后的
         with dt[0]:

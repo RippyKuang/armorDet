@@ -36,6 +36,7 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, c
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
+barmor=[3,4,5,21,22,23,24,25,26,27,28]
 HELP_URL = 'See https://docs.ultralytics.com/yolov5/tutorials/train_custom_data'
 IMG_FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm'  # include image suffixes
 VID_FORMATS = 'asf', 'avi', 'gif', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'ts', 'wmv'  # include video suffixes
@@ -716,7 +717,7 @@ class LoadImagesAndLabels(Dataset):
             img, labels = self.load_mosaic(index) #load_mosaic将随机选取4张图片组合成一张图片
             shapes = None
 
-            # MixUp augmentation
+            #MixUp augmentation
             if random.random() < hyp['mixup']:
                 img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
 
@@ -836,19 +837,29 @@ class LoadImagesAndLabels(Dataset):
                 x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
                 x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
-            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            
             padw = x1a - x1b
             padh = y1a - y1b
 
             # Labels labels是数据集里的标签
-            labels, segments = self.labels[index].copy(), self.segments[index].copy()
+            labels, _ = self.labels[index].copy(), self.segments[index].copy()
+
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
+                if random.random() < 0.5:
+                    isrc = random.choices(self.indices, k=1)
+                    imgsrc, _, (_h, _w) = self.load_image(isrc[0])
+
+                    img,labels = makeSentry(imgsrc.copy(),self.labels[isrc[0]].copy(),img.copy(),labels)
+                
+
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
-                segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
+            
+            
             labels4.append(labels)
-            segments4.extend(segments)
+            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+        
 
         # Concat/clip labels
         # 形状为 (4,9)
@@ -1284,3 +1295,51 @@ def create_classification_dataloader(path,
                               pin_memory=PIN_MEMORY,
                               worker_init_fn=seed_worker,
                               generator=generator)  # or DataLoader(persistent_workers=True)
+
+
+def makeSentry(src,_src_label,dst,dst_labels):
+
+   msk = np.zeros(dst.shape[:2],np.uint8)
+   src_shape = np.asarray(src.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
+   dst_shape = np.asarray(dst.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
+   _src_label[...,1:] =  _src_label[...,1:] * src_shape
+   dlb = []
+  
+   rmsks = []
+   tmsks = []
+   for dst_label in dst_labels:
+        rx = random.randint(0,len(_src_label)-1)
+        src_label = _src_label[rx][1:]
+        issrcb = _src_label[rx][0:1] in barmor
+        isdstb = dst_label[0] in barmor
+        if issrcb!= isdstb:
+            continue
+        dst_label[0] = _src_label[rx][0:1]
+        dlb.append(dst_label)
+        max_x = int(np.max(src_label[[0,2,4,6]]))
+        min_x = int(np.min(src_label[[0,2,4,6]]))
+        max_y = int(np.max(src_label[[1,3,5,7]]))
+        min_y = int(np.min(src_label[[1,3,5,7]]))
+        _src = src[min_y:max_y,min_x:max_x]
+        src_label = src_label - [min_x,min_y]*4
+
+        pst1=np.float32([[src_label[0],src_label[1]],[src_label[2],src_label[3]],[src_label[4],src_label[5]],[src_label[6],src_label[7]]])
+        
+        rdst_label = dst_label[...,1:]* dst_shape
+
+        pst2=np.float32([[rdst_label[0],rdst_label[1]],[rdst_label[2],rdst_label[3]],[rdst_label[4],rdst_label[5]],[rdst_label[6],rdst_label[7]]])
+        matrix=cv2.getPerspectiveTransform(pst1,pst2)
+        try:
+            msk=cv2.warpPerspective(_src,matrix,(dst.shape[1],dst.shape[0]))
+        except Exception:
+            cv2.imwrite("./test.jpg",src)
+        gmsk = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY)
+        _,temp_msk= cv2.threshold(gmsk, 0, 255,cv2.THRESH_BINARY)
+        rmsks.append(cv2.bitwise_not(temp_msk))
+        tmsks.append(msk)
+   if len(dlb) == 0:
+       return dst,dst_labels
+   for i,tmsk in enumerate(tmsks):
+        dst = cv2.merge([cv2.bitwise_and(s,rmsks[i]) for s in cv2.split(dst)])
+        dst = cv2.add(dst,tmsk)
+   return dst,np.asarray(dlb)
