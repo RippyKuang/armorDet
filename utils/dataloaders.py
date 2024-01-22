@@ -32,7 +32,7 @@ from utils.augmentations import (Albumentations, augment_hsv, classify_albumenta
                                  letterbox, mixup, random_perspective)
 from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
-                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn,xyxyxyxyn,format_)
+                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn,xyxyxyxyn,format_,labels_to_class_weights,labels_to_image_weights)
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
@@ -191,7 +191,7 @@ def create_dataloader(path,
     return loader(dataset,
                   batch_size=batch_size,
                   shuffle=shuffle and sampler is None,
-                  num_workers=8,
+                  num_workers=16,
                   sampler=sampler,
                   pin_memory=PIN_MEMORY,
                   collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn,
@@ -312,6 +312,7 @@ class LoadImages:
         self.auto = auto
         self.transforms = transforms  # optional
         self.vid_stride = vid_stride  # video frame-rate stride
+   
         if any(videos):
             self._new_video(videos[0])  # new video
         else:
@@ -506,7 +507,7 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
-
+       
         try:
             f = []  # image files
             # 处理好几个路径
@@ -566,6 +567,8 @@ class LoadImagesAndLabels(Dataset):
         self.shapes = np.array(shapes)
         self.im_files = list(cache.keys())  # im_files是图片的绝对路径
         self.label_files = img2label_paths(cache.keys())  # 标签文件的绝对路径
+        self.classweights =labels_to_class_weights(self.labels, 29) * 29
+
 
         # Filter images
         if min_items:
@@ -641,6 +644,8 @@ class LoadImagesAndLabels(Dataset):
                     b += self.ims[i].nbytes * WORLD_SIZE
                 pbar.desc = f'{prefix}Caching images ({b / gb:.1f}GB {cache_images})'
             pbar.close()
+        
+       
 
     def check_cache_ram(self, safety_margin=0.1, prefix=''):
         # Check image caching requirements vs available memory
@@ -847,11 +852,8 @@ class LoadImagesAndLabels(Dataset):
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
-                if random.random() < 0.5:
-                    isrc = random.choices(self.indices, k=1)
-                    imgsrc, _, (_h, _w) = self.load_image(isrc[0])
-
-                    img,labels = makeSentry(imgsrc.copy(),self.labels[isrc[0]].copy(),img.copy(),labels)
+                if random.random() > 0.5:
+                    img,labels = self.makeSentry(img.copy(),labels)
                 
 
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
@@ -884,7 +886,59 @@ class LoadImagesAndLabels(Dataset):
                                            border=self.mosaic_border)  # border to remove
 
         return img4, labels4
+    
+    def makeSentry(self,dst,dst_labels):
+        isrc = random.choices(self.indices, k=1)
+        imgsrc, _, (_h, _w) = self.load_image(isrc[0])
+        src = imgsrc.copy()
+        _src_label = self.labels[int(isrc[0])].copy()
+        msk = np.zeros(dst.shape[:2],np.uint8)
+        src_shape = np.asarray(src.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
+        dst_shape = np.asarray(dst.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
+        _src_label[...,1:] =  _src_label[...,1:] * src_shape
+        dlb = []
+  
+        rmsks = []
+        tmsks = []
+        for dst_label in dst_labels:
+            if random.random() < self.classweights[int(dst_label[0])]:
+                continue
+            rx = random.randint(0,len(_src_label)-1)
+            src_label = _src_label[rx][1:]
+            issrcb = _src_label[rx][0:1] in barmor
+            isdstb = dst_label[0] in barmor
+            if issrcb!= isdstb:
+                continue
+            dst_label[0] = _src_label[rx][0:1]
+            dlb.append(dst_label)
+            max_x = int(np.max(src_label[[0,2,4,6]]))
+            min_x = int(np.min(src_label[[0,2,4,6]]))
+            max_y = int(np.max(src_label[[1,3,5,7]]))
+            min_y = int(np.min(src_label[[1,3,5,7]]))
+            _src = src[min_y:max_y,min_x:max_x]
+            src_label = src_label - [min_x,min_y]*4
 
+            pst1=np.float32([[src_label[0],src_label[1]],[src_label[2],src_label[3]],[src_label[4],src_label[5]],[src_label[6],src_label[7]]])
+        
+            rdst_label = dst_label[...,1:]* dst_shape
+
+            pst2=np.float32([[rdst_label[0],rdst_label[1]],[rdst_label[2],rdst_label[3]],[rdst_label[4],rdst_label[5]],[rdst_label[6],rdst_label[7]]])
+            matrix=cv2.getPerspectiveTransform(pst1,pst2)
+            try:
+                msk=cv2.warpPerspective(_src,matrix,(dst.shape[1],dst.shape[0]))
+            except Exception:
+                cv2.imwrite("./test.jpg",src)
+            gmsk = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY)
+            _,temp_msk= cv2.threshold(gmsk, 0, 255,cv2.THRESH_BINARY)
+            rmsks.append(cv2.bitwise_not(temp_msk))
+            tmsks.append(msk)
+        if len(dlb) == 0:
+            return dst,dst_labels
+        for i,tmsk in enumerate(tmsks):
+            dst = cv2.merge([cv2.bitwise_and(s,rmsks[i]) for s in cv2.split(dst)])
+            dst = cv2.add(dst,tmsk)
+        return dst,np.asarray(dlb)
+    
     def load_mosaic9(self, index):
         # YOLOv5 9-mosaic loader. Loads 1 image + 8 random images into a 9-image mosaic
         labels9, segments9 = [], []
@@ -994,6 +1048,8 @@ class LoadImagesAndLabels(Dataset):
             lb[:, 0] = i  # add target image index for build_targets()
 
         return torch.stack(im4, 0), torch.cat(label4, 0), path4, shapes4
+    
+
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
@@ -1297,49 +1353,3 @@ def create_classification_dataloader(path,
                               generator=generator)  # or DataLoader(persistent_workers=True)
 
 
-def makeSentry(src,_src_label,dst,dst_labels):
-
-   msk = np.zeros(dst.shape[:2],np.uint8)
-   src_shape = np.asarray(src.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
-   dst_shape = np.asarray(dst.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
-   _src_label[...,1:] =  _src_label[...,1:] * src_shape
-   dlb = []
-  
-   rmsks = []
-   tmsks = []
-   for dst_label in dst_labels:
-        rx = random.randint(0,len(_src_label)-1)
-        src_label = _src_label[rx][1:]
-        issrcb = _src_label[rx][0:1] in barmor
-        isdstb = dst_label[0] in barmor
-        if issrcb!= isdstb:
-            continue
-        dst_label[0] = _src_label[rx][0:1]
-        dlb.append(dst_label)
-        max_x = int(np.max(src_label[[0,2,4,6]]))
-        min_x = int(np.min(src_label[[0,2,4,6]]))
-        max_y = int(np.max(src_label[[1,3,5,7]]))
-        min_y = int(np.min(src_label[[1,3,5,7]]))
-        _src = src[min_y:max_y,min_x:max_x]
-        src_label = src_label - [min_x,min_y]*4
-
-        pst1=np.float32([[src_label[0],src_label[1]],[src_label[2],src_label[3]],[src_label[4],src_label[5]],[src_label[6],src_label[7]]])
-        
-        rdst_label = dst_label[...,1:]* dst_shape
-
-        pst2=np.float32([[rdst_label[0],rdst_label[1]],[rdst_label[2],rdst_label[3]],[rdst_label[4],rdst_label[5]],[rdst_label[6],rdst_label[7]]])
-        matrix=cv2.getPerspectiveTransform(pst1,pst2)
-        try:
-            msk=cv2.warpPerspective(_src,matrix,(dst.shape[1],dst.shape[0]))
-        except Exception:
-            cv2.imwrite("./test.jpg",src)
-        gmsk = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY)
-        _,temp_msk= cv2.threshold(gmsk, 0, 255,cv2.THRESH_BINARY)
-        rmsks.append(cv2.bitwise_not(temp_msk))
-        tmsks.append(msk)
-   if len(dlb) == 0:
-       return dst,dst_labels
-   for i,tmsk in enumerate(tmsks):
-        dst = cv2.merge([cv2.bitwise_and(s,rmsks[i]) for s in cv2.split(dst)])
-        dst = cv2.add(dst,tmsk)
-   return dst,np.asarray(dlb)

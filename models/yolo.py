@@ -27,7 +27,7 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto,SE)
+                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -76,7 +76,7 @@ class Detect(nn.Module):
                     self.anchor_grid[i]=self.anchor_grid[i].repeat(1,1,1,1,4)
 
                
-                ep, conf = x[i].sigmoid().tensor_split([8], dim=-1)
+                ep, conf = x[i].sigmoid().split((8,self.nc+1), dim=4)
                 xy = (2*self.anchor_grid[i]*(ep * 2 - 0.5)+self.grid[i])*self.stride[i]
                 y = torch.cat((xy, conf), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
@@ -339,7 +339,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 n = 1
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
-        elif m is Concat:
+        elif m in {Concat,BiFPN_Concat3,BiFPN_Concat2}:
             c2 = sum(ch[x] for x in f)
         # TODO: channel, gw, gd
         elif m in {Detect, Segment}:
