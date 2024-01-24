@@ -5,6 +5,6 @@ val: train  # val images (relative to 'path') 128 images
 
 # Classes
 names:
-  0: b
-  1: r
-  2: n
+  0: sb
+  1: sr
+  2: sn
