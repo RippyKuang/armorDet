@@ -161,7 +161,7 @@ class ComputeLoss:
                 if self.nc > 1:  # cls loss (only if multiple classes) 
                     #pcls shape:(808,80)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(n), tcls[i]] = self.cp   #构造独热码
+                    t[range(n), tcls[i]] = iou   #构造独热码
                     lcls += self.BCEcls(pcls, t)  # BCE
 
             obji = self.BCEobj(pi[..., 8], tobj) 
