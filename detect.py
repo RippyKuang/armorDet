@@ -207,7 +207,7 @@ def run(
                     cv2.line(im0, p3, p4, color=(0, 255, 0), thickness=1)
                     cv2.line(im0, p4, p1, color=(0, 255, 0), thickness=1)
                     
-                    cv2.putText(im0, label, [p1[0] - 10, p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
+                    cv2.putText(im0, label, [p1[0] - 20, p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
                     cv2.putText(im0, str(confidence), [p1[0], p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
 
                     # confidence_str = f'{confidence:.2f}'
