@@ -156,12 +156,12 @@ class ComputeLoss:
                 lpts_sum +=torch.sum(torch.abs(pep-tbox[i]),dim=-1).mean()*(2**i)
                 ciou = ciou.detach().clamp(0).type(tobj.dtype)
               
-                tobj[b, a, gj, gi] = ciou  # iou ratio
+                tobj[b, a, gj, gi] = self.cp  # iou ratio
 
                 if self.nc > 1:  # cls loss (only if multiple classes) 
                     #pcls shape:(808,80)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(n), tcls[i]] = iou   #构造独热码
+                    t[range(n), tcls[i]] = iou  #构造独热码
                     lcls += self.BCEcls(pcls, t)  # BCE
 
             obji = self.BCEobj(pi[..., 8], tobj) 

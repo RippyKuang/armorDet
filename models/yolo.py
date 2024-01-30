@@ -27,7 +27,7 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA)
+                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -328,7 +328,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in {
                 Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA}:
+                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA,CBRM,Shuffle_Block}:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, ch_mul)

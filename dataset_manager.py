@@ -7,32 +7,33 @@ import numpy as np
 from PIL import Image, ImageStat
 IMG_TYPE = ['png','jpg','bmp']
 NORMAL_TYPE = ['png','jpg','bmp','txt','xml']
-dic = {'armor_sentry_blue':0,
-       'armor_sentry_red':1,
-       'armor_sentry_none':2,
-       'armor_hero_blue':3,
-       'armor_hero_red':4,
-       'armor_hero_none':5,
-       'armor_engine_blue':6,
-       'armor_engine_red':7,
-       'armor_engine_none':8,
-       'armor_infantry_3_blue':9,  #28
-       'armor_infantry_3_red':10,  #29
-       'armor_infantry_3_none':11,
-       'armor_infantry_4_blue':12,  #25
-       'armor_infantry_4_red':13,    #26
-       'armor_infantry_4_none':14,
-       'armor_infantry_5_blue':15,  #31
-       'armor_infantry_5_red':16,   #32
-       'armor_infantry_5_none':17,
-       'armor_outpost_blue':18,
-       'armor_outpost_red':19,
-       'armor_outpost_none':20,
-       'armor_base_blue':21,
-       'armor_base_red':22,
+dic = {'armor_sentry_blue':0,   #BG
+       'armor_sentry_red':1,     #B1
+       'armor_sentry_none':2,    #B2
+       'armor_hero_blue':3,      #B3
+       'armor_hero_red':4,       #B4
+       'armor_hero_none':5,      #B5
+       'armor_engine_blue':6,    #BO
+       'armor_engine_red':7,     #BBs
+       'armor_engine_none':8,     #BBb
+       'armor_infantry_3_blue':9,  #RG
+       'armor_infantry_3_red':10,  #R1
+       'armor_infantry_3_none':11,  #R2
+       'armor_infantry_4_blue':12,  #R3
+       'armor_infantry_4_red':13,    #R4
+       'armor_infantry_4_none':14,    #R5
+       'armor_infantry_5_blue':15,  #RO
+       'armor_infantry_5_red':16,   #RBs
+       'armor_infantry_5_none':17,  #RBb
+       'armor_outpost_blue':18,      #NG
+       'armor_outpost_red':19,  #N1
+       'armor_outpost_none':20,  #N2
+       'armor_base_blue':21,   #N3
+       'armor_base_red':22,    #n4
        'armor_base_purple':23,
        'armor_base_none':24,
        }
+r_dic = {v:k for k,v in dic.items()}
 big_dic = {
     "25":"23",
     "26":"24",
@@ -180,6 +181,13 @@ def removenone(files):
                 continue  
         f.close()    
 
+def saveLabel(path,name,img,labels):
+     with open(path+'/'+name+'.txt', 'w') as writers: 
+            for l in labels:
+                writers.write(l)
+     writers.close()
+     cv.imwrite(path+'/'+name+'.png',img)
+
 
 def makeSentry(sentry_path,oths_path,num,dst):
     sts = loadfolder(sentry_path,['txt'])
@@ -222,8 +230,46 @@ def makeSentry(sentry_path,oths_path,num,dst):
         
 
 
+def res_viewer(path,gpath,bpath):
+    txts = loadfolder(path,['txt'])
+    gcnt =0
+    bcnt =0
+    for tp,tn in txts:
+        imgp = tp+'/'+tn.split('.')[-2]+'.png' 
+        img0 = cv.imread(imgp)
+        img = cv.resize(img0,(img0.shape[1]*2,img0.shape[0]*2))
 
-     
+        with open(tp+'/'+tn, 'r', encoding='utf-8') as f:
+            datas = f.readlines()
+            for data in datas:
+                line = data.split(' ')
+                name = r_dic[int(line[0])]
+                loc = [float(x) for x in line[1:]]* np.asarray(img.shape[:2] * 4)[[1,0,3,2,5,4,7,6]] 
+                loc = [int(x) for x in loc]
+                img = cv.circle(img, (loc[0],loc[1]), 2, (0,255,255), 2) 
+                img = cv.circle(img, (loc[2],loc[3]), 2, (255,255,0), 2) 
+                img = cv.circle(img, (loc[4],loc[5]), 2, (0,255,), 2) 
+                img = cv.circle(img, (loc[6],loc[7] ), 2, (0,0,255), 2) 
+                cv.putText(img,name,(loc[2],loc[3]+5),cv.FONT_HERSHEY_COMPLEX,0.8,(0,0,255),1)
+
+            cv.imshow("show", img)
+            key = cv.waitKey(0) 
+            print(key)
+            if key == 108:
+            #    saveLabel(bpath,str(bcnt),img0,datas)
+                bcnt += 1
+            elif key ==120:
+                os.remove(tp+'/'+tn)   
+                os.remove(imgp)   
+
+            else:  
+            #    saveLabel(gpath,str(gcnt),img0,datas)
+                gcnt += 1
+                
+        f.close()
+
+
+
 
 
 def png2txt(s):
@@ -234,6 +280,7 @@ def txt2jpg(s):
     return s.split('.')[-2]+'.jpg' 
 
 if __name__ == '__main__':
+    res_viewer("./res","./good","./bad")
     # sourcepath =  "./xmlDataset"
     # datasetpath = "./detaset"
 #     src = "./xmlDataset/23sentry/HERO-23-OTH-0.jpg" 
@@ -244,7 +291,7 @@ if __name__ == '__main__':
 # "22 0.0342471 0.346396 0.0330575 0.365014 0.0753888 0.369237 0.0755143 0.349704",
 # "5 0.760138 0.488119 0.759425 0.513455 0.834388 0.50855 0.835429 0.482262"
 # ]
-    makeSentry("xmlDataset/23sentry","./detaset/train",5000,"./temp")
+   # makeSentry("xmlDataset/23sentry","./detaset/train",5000,"./temp")
     
     #bigpath = "./balanced_infantry/ann"
    # png = loadfolder(sourcepath,['png','jpg'])
