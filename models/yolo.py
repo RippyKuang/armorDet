@@ -49,8 +49,10 @@ class Detect(nn.Module):
 
     def __init__(self, nc=80, anchors=(), ch=(), inplace=True):  # detection layer
         super().__init__()
-        self.nc = nc  # number of classes
-        self.no = nc + 9  # number of outputs per anchor +xyxyxyxy conf
+        self.clr = 3
+        self.nc = 33 // self.clr  # number of classes
+        self.no = self.clr + self.nc + 9  # number of outputs per anchor +xyxyxyxy conf
+        self.tno = self.clr*self.nc + 9
         self.nl = len(anchors)  # number of detection layers 每层有一个anchor
         self.na = len(anchors[0]) // 2  # number of anchors 每个anchor有两个参数，所以除以二
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
@@ -76,10 +78,14 @@ class Detect(nn.Module):
                     self.anchor_grid[i]=self.anchor_grid[i].repeat(1,1,1,1,4)
 
                
-                ep, conf = x[i].sigmoid().split((8,self.nc+1), dim=4)
+                ep, conf,clr,cls = x[i].sigmoid().split((8,1,self.clr,self.nc), dim=-1)
+                clr = clr.repeat(1,1,1,1,self.nc)
+                cls = cls.repeat_interleave(3,dim=-1)
+                cls = clr * cls
+             
                 xy = (6*self.anchor_grid[i]*(ep - 0.5)+self.grid[i])*self.stride[i]
-                y = torch.cat((xy, conf), -1)
-                z.append(y.view(bs, self.na * nx * ny, self.no))
+                y = torch.cat((xy, conf,cls), -1)
+                z.append(y.view(bs, self.na * nx * ny, self.tno))
 
         return x if self.training else (torch.cat(z, 1), ) if self.export else (torch.cat(z, 1), x)
 

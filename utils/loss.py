@@ -93,7 +93,7 @@ class ComputeLoss:
     sort_obj_iou = False
 
     # Compute losses
-    def __init__(self, model, autobalance=False):
+    def __init__(self, model, autobalance=True):
         device = next(model.parameters()).device  # get model device
         h = model.hyp  # hyperparameters
 
@@ -136,6 +136,7 @@ class ComputeLoss:
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # 四个参数什么意思见最下面
         #indices里的是坐标，tbox里的是偏移量 
         # Losses
+        
         for i, pi in enumerate(p):  # layer index, layer predictions
            
             b, a, gj, gi = indices[i]  # image index,anchor index，预测该gt box的网格y坐标，预测该gt box的网格x坐标。
@@ -143,6 +144,7 @@ class ComputeLoss:
             #tobj shape: torch.Size([16, 3, 80, 80])
             #pi shape： torch.Size([16, 3, 80, 80, 85]) 8 16 32
             n = b.shape[0]  # number of targets 下文中的712
+          
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
@@ -161,9 +163,11 @@ class ComputeLoss:
                 if self.nc > 1:  # cls loss (only if multiple classes) 
                     #pcls shape:(808,80)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(n), tcls[i]] = iou  #构造独热码
-                    lcls += self.BCEcls(pcls, t)  # BCE
 
+                    t[range(n), 3+tcls[i]//3] = ciou  #构造独热码
+                    t[range(n), tcls[i]%3] = self.cp
+                    lcls =lcls+ self.BCEcls(pcls[:,:3], t[:,:3])*(1-iou).mean()+self.BCEcls(pcls[:,3:], t[:,3:])*(iou.mean())  # BCE
+ 
             obji = self.BCEobj(pi[..., 8], tobj) 
             lobj += obji * self.balance[i]# obj loss
             if self.autobalance:
@@ -271,6 +275,7 @@ class ComputeLoss:
             a, (b, c) = a.long().view(-1), bc.long().T  # anchors:(712,1),表示anchor的索引, image, class
             gij = (gc - offsets).long()  #转换成了整形，是预测该gtbox的网格坐标，这样下面gxy - gij得到的不是offsets，而是相对该网格的偏移量
             gi, gj = gij.T  # grid indices
+
 
             # Append 一共三次循环，一次循环append一个最高维度
             indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))  # image, anchor, grid

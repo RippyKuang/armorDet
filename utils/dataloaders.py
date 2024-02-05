@@ -36,7 +36,7 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, c
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
-barmor=[3,4,5,21,22,23,24,25,26,27,28]
+barmor=[3,4,5,21,22,23,24,25,26,27,28,29,30,31,32]
 HELP_URL = 'See https://docs.ultralytics.com/yolov5/tutorials/train_custom_data'
 IMG_FORMATS = 'bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm'  # include image suffixes
 VID_FORMATS = 'asf', 'avi', 'gif', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'ts', 'wmv'  # include video suffixes
@@ -156,7 +156,7 @@ def create_dataloader(path,
                       pad=0.0,
                       rect=False,
                       rank=-1,
-                      workers=8,
+                      workers=0,
                       image_weights=False,
                       quad=False,
                       prefix='',
@@ -567,7 +567,7 @@ class LoadImagesAndLabels(Dataset):
         self.shapes = np.array(shapes)
         self.im_files = list(cache.keys())  # im_files是图片的绝对路径
         self.label_files = img2label_paths(cache.keys())  # 标签文件的绝对路径
-        self.classweights =labels_to_class_weights(self.labels, 29) * 29
+        self.classweights =labels_to_class_weights(self.labels, 33) 
 
 
         # Filter images
@@ -852,8 +852,8 @@ class LoadImagesAndLabels(Dataset):
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
-                if random.random() > 0.5:
-                    img,labels = self.makeSentry(img.copy(),labels)
+               
+                img,labels = self.makeSentry(img.copy(),labels)
                 
 
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
@@ -886,14 +886,72 @@ class LoadImagesAndLabels(Dataset):
                                            border=self.mosaic_border)  # border to remove
 
         return img4, labels4
+    def expand_label(self,label,shape,ratio=0.5):
+        exp_label =[]
+        arg = np.array([1.0,1.0,-1.0,-1.0]) * ratio
+        deta_xy1 = np.asarray([label[0]-label[2],label[1]-label[3]] *2)
+        exp_label[:4] = label[:4] + arg * deta_xy1
+        deta_xy2 = np.asarray([label[6]-label[4],label[7]-label[5]] *2)
+        exp_label[4:] = label[4:] + arg * deta_xy2
+        for x in range(8):
+            exp_label[x] = exp_label[x] if exp_label[x]<shape[x%2] else shape[x%2]
+            exp_label[x] = exp_label[x] if exp_label[x]>0 else 0
+        return np.asarray(exp_label)
+  
+    def rotate_and_pad(self,src,src_label):
+        max_x = int(np.max(src_label[[0,2,4,6]]))
+        min_x = int(np.min(src_label[[0,2,4,6]]))
+        max_y = int(np.max(src_label[[1,3,5,7]]))
+        min_y = int(np.min(src_label[[1,3,5,7]]))
+
+   
+        h, w =max_y-min_y,max_x-min_x
+        hm = math.ceil(h*2.0)
+        wm = math.ceil(w*1.4)
+
+
+        padding_h = (hm - h) // 2
+        padding_w = (wm - w) // 2
+        center = (hm // 2, wm // 2)
+        pminy = min_y-padding_h if min_y-padding_h>0 else 0
+        pmaxy = max_y+padding_h if max_y+padding_h<src.shape[:2][0] else src.shape[:2][0]
+        pminx = min_x-padding_w if min_x-padding_w>0 else 0
+        pmaxx = max_x+padding_w if max_x+padding_w<src.shape[:2][1] else src.shape[:2][1]
+   
+
+        img_padded = src[pminy:pmaxy,pminx:pmaxx,:]
+        src_label = src_label - [min_x - padding_w,min_y - padding_h]*4 
+
+        M = np.eye(3)
+        rad = math.atan((src_label[7]-src_label[1])/(src_label[6]-src_label[0]))
+        M[:2] = cv2.getRotationMatrix2D(center, rad*57.3, 1)
+        rotated_padded = cv2.warpAffine(img_padded, M[:2], (wm, hm))
+
+        xy = np.ones((4, 3))
+        xy[:, :2] = src_label.reshape(4, 2)  # x1y1, x2y2, x1y2, x2y1
+        xy = xy @ M.T  # transform
+        src_label = xy[:,:2].reshape(8)
+
+
+        S = np.eye(3)
+        S[0, 1] = (src_label[2]-src_label[0])/(src_label[1]-src_label[3])
+        rotated_padded = cv2.warpAffine(rotated_padded, (S )[:2], (wm, hm))
+
+        xy = np.ones((4, 3))
+        xy[:, :2] = src_label.reshape(4, 2)  # x1y1, x2y2, x1y2, x2y1
+        xy = xy @ S.T  # transform
+        src_label = xy[:,:2].reshape(8)
+  
+
+        return rotated_padded,src_label
     
     def makeSentry(self,dst,dst_labels):
         isrc = random.choices(self.indices, k=1)
         imgsrc, _, (_h, _w) = self.load_image(isrc[0])
-        src = imgsrc.copy()
+        ori_src = imgsrc.copy()
         _src_label = self.labels[int(isrc[0])].copy()
         msk = np.zeros(dst.shape[:2],np.uint8)
-        src_shape = np.asarray(src.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
+        src_shape = np.asarray(ori_src.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
         dst_shape = np.asarray(dst.shape[:2] * 4)[[1,0,3,2,5,4,7,6]]
         _src_label[...,1:] =  _src_label[...,1:] * src_shape
         dlb = []
@@ -901,20 +959,36 @@ class LoadImagesAndLabels(Dataset):
         rmsks = []
         tmsks = []
         for dst_label in dst_labels:
-            if random.random() < self.classweights[int(dst_label[0])]:
+            if random.random() > self.classweights[int(dst_label[0])] * 0.8 :
+                dlb.append(dst_label)
                 continue
             rx = random.randint(0,len(_src_label)-1)
             src_label = _src_label[rx][1:]
             issrcb = _src_label[rx][0:1] in barmor
             isdstb = dst_label[0] in barmor
             if issrcb!= isdstb:
+                dlb.append(dst_label)
+                continue
+           
+           
+            src,src_label = self.rotate_and_pad(ori_src,src_label)
+            if any(src_label<0)==True:
+                dlb.append(dst_label)
+                continue
+           
+            src_shape =  np.asarray(src.shape[:2])[[1,0]]
+            exp_label = self.expand_label(src_label,src_shape,0.5)
+            exp_label = self.expand_label(exp_label[[3,2,5,4,7,6,1,0]],src_shape[[1,0]],0.2)[[7,6,1,0,3,2,5,4]]
+
+            max_x = int(np.max(exp_label[[0,2,4,6]]))
+            min_x = int(np.min(exp_label[[0,2,4,6]]))
+            max_y = int(np.max(exp_label[[1,3,5,7]]))
+            min_y = int(np.min(exp_label[[1,3,5,7]]))
+            if max_x - min_x <5 or max_y-min_y<5:
+                dlb.append(dst_label)
                 continue
             dst_label[0] = _src_label[rx][0:1]
             dlb.append(dst_label)
-            max_x = int(np.max(src_label[[0,2,4,6]]))
-            min_x = int(np.min(src_label[[0,2,4,6]]))
-            max_y = int(np.max(src_label[[1,3,5,7]]))
-            min_y = int(np.min(src_label[[1,3,5,7]]))
             _src = src[min_y:max_y,min_x:max_x]
             src_label = src_label - [min_x,min_y]*4
 
@@ -924,12 +998,14 @@ class LoadImagesAndLabels(Dataset):
 
             pst2=np.float32([[rdst_label[0],rdst_label[1]],[rdst_label[2],rdst_label[3]],[rdst_label[4],rdst_label[5]],[rdst_label[6],rdst_label[7]]])
             matrix=cv2.getPerspectiveTransform(pst1,pst2)
+            gsrc = cv2.cvtColor(_src, cv2.COLOR_BGR2GRAY)+1
             try:
                 msk=cv2.warpPerspective(_src,matrix,(dst.shape[1],dst.shape[0]))
+                qmsk=cv2.warpPerspective(gsrc,matrix,(dst.shape[1],dst.shape[0]))
             except Exception:
                 cv2.imwrite("./test.jpg",src)
-            gmsk = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY)
-            _,temp_msk= cv2.threshold(gmsk, 0, 255,cv2.THRESH_BINARY)
+         
+            _,temp_msk= cv2.threshold(qmsk, 0, 255,cv2.THRESH_BINARY)
             rmsks.append(cv2.bitwise_not(temp_msk))
             tmsks.append(msk)
         if len(dlb) == 0:
@@ -939,6 +1015,9 @@ class LoadImagesAndLabels(Dataset):
             dst = cv2.add(dst,tmsk)
         return dst,np.asarray(dlb)
     
+
+
+
     def load_mosaic9(self, index):
         # YOLOv5 9-mosaic loader. Loads 1 image + 8 random images into a 9-image mosaic
         labels9, segments9 = [], []

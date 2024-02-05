@@ -702,14 +702,8 @@ def labels_to_class_weights(labels, nc=80):
     labels = np.concatenate(labels, 0)  # labels.shape = (866643, 5) for COCO ，labels形状是（数据集的数量，标签的内容）
     classes = labels[:, 0].astype(int)  # 每个图片对应的类别 长度为图片的数目
     weights = np.bincount(classes, minlength=nc)  # 每个类别的图片数量，长度为80
-
-    # Prepend gridpoint count (for uCE training)
-    # gpi = ((320 / 32 * np.array([1, 2, 4])) ** 2 * 3).sum()  # gridpoints per image
-    # weights = np.hstack([gpi * len(labels)  - weights.sum() * 9, weights * 9]) ** 0.5  # prepend gridpoints to start
-
-    weights[weights == 0] = 1  # replace empty bins with 1
-    weights = 1 / weights  # number of targets per class
-    weights /= weights.sum()  # normalize
+  
+    weights = weights/weights.max()  # normalize
     return torch.from_numpy(weights).float()
 
 

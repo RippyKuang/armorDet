@@ -20,6 +20,8 @@ Tutorial:   https://docs.ultralytics.com/yolov5/tutorials/train_custom_data
 import argparse
 import math
 import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import random
 import subprocess
 import sys
@@ -258,7 +260,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     hyp['label_smoothing'] = opt.label_smoothing
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  #每个类别的图片越少，占比越大
+    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) #每个类别的图片越少，占比越大
     model.names = names #names是一个字典，键是数字，值是名字，比如15:'cat'
 
     # Start training
@@ -280,11 +282,12 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 f'Starting training for {epochs} epochs...')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run('on_train_epoch_start')
+    
         model.train()
 
         # Update image weights (optional, single-GPU only)
         if opt.image_weights:
-            cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # map越小 class weights越大
+            cw = (1 - maps) ** 2 / nc  # map越小 class weights越大
             iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
             dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx dataset.n是数据集的长度
 
@@ -304,7 +307,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             callbacks.run('on_train_batch_start')
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
- 
+
             # Warmup
             if ni <= nw:
                 xi = [0, nw]  # x interp
