@@ -156,7 +156,7 @@ class ComputeLoss:
                 lpts_sum +=torch.sum(torch.abs(pep-tbox[i]),dim=-1).mean()*(2**i)
                 ciou = ciou.detach().clamp(0).type(tobj.dtype)
               
-                tobj[b, a, gj, gi] = self.cp  # iou ratio
+                tobj[b, a, gj, gi] = ciou  # iou ratio
 
                 if self.nc > 1:  # cls loss (only if multiple classes) 
                     #pcls shape:(808,80)
