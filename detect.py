@@ -3,7 +3,7 @@
 Run YOLOv5 detection inference on images, videos, directories, globs, YouTube, webcam, streams, etc.
 
 Usage - sources:
-    $ python detect.py --weights yolov5s.pt --source 0                               # webcam
+    $ python detect.py --weights last.pt --source ../datasets/62.avi                               # webcam
                                                      img.jpg                         # image
                                                      vid.mp4                         # video
                                                      screen                          # screenshot
@@ -213,13 +213,13 @@ def run(
                     # confidence_str = f'{confidence:.2f}'
                     # if save_csv:
                     #     write_to_csv(p.name, label, confidence_str)
-                    #
+                    
                     # if save_txt:  # Write to file
                     #     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                     #     line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
                     #     with open(f'{txt_path}.txt', 'a') as f:
                     #         f.write(('%g ' * len(line)).rstrip() % line + '\n')
-                    #
+                    
                     # if save_img or save_crop or view_img:  # Add bbox to image
                     #     c = int(cls)  # integer class
                     #     label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
@@ -275,7 +275,7 @@ def parse_opt():
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/screen/0(webcam)')
     parser.add_argument('--data', type=str, default=ROOT / 'data/test.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--conf-thres', type=float, default=0.5, help='confidence threshold')
+    parser.add_argument('--conf-thres', type=float, default=0.4, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.2, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')

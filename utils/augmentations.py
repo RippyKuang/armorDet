@@ -64,10 +64,12 @@ def denormalize(x, mean=IMAGENET_MEAN, std=IMAGENET_STD):
     return x
 
 
-def augment_hsv(im, hgain=0.5, sgain=0.5, vgain=0.5):
+def augment_hsv(im, hgain=0.015, sgain=0.7, vgain=[0.3,1.2]):
     # HSV color-space augmentation
     if hgain or sgain or vgain:
-        r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
+        vrange = (vgain[1]-vgain[0])/2
+        vmean = (vgain[1]+vgain[0])/2
+        r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vrange] + [1,1,vmean]  # random gains
         hue, sat, val = cv2.split(cv2.cvtColor(im, cv2.COLOR_BGR2HSV))
         dtype = im.dtype  # uint8
 
@@ -147,7 +149,7 @@ def random_perspective(im,
                        degrees=0,
                        # degrees=10,
                        translate=.1,
-                       scale=.1,
+                       scale=[0.3,1.5],
                        shear=10,
                        perspective=0.0,
                        border=(0, 0)):
@@ -164,7 +166,7 @@ def random_perspective(im,
     R = np.eye(3)
     a = random.uniform(-degrees, degrees)
     # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
-    s = random.uniform(1 - scale, 1 + scale)
+    s = random.uniform(scale[0], scale[1])
     # s = 2 ** random.uniform(-scale, scale)
     R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
 
@@ -177,9 +179,13 @@ def random_perspective(im,
     T[0, 2] = random.uniform(0.5 - translate, 0.5 + translate) * width  # x translation (pixels)
     T[1, 2] = random.uniform(0.5 - translate, 0.5 + translate) * height  # y translation (pixels)
 
+    P = np.eye(3)
+    P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
+    P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
+
     # Combined rotation matrix
-    # M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
-    M = T @ S @ R @ C
+    M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
+    #M = T @ S @ R @ C
     if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
         if perspective:
             im = cv2.warpPerspective(im, M, dsize=(width, height), borderValue=(114, 114, 114))
@@ -244,9 +250,7 @@ def random_perspective(im,
 #     C[1, 2] = -im.shape[0] / 2  # y translation (pixels)
 #
 #     # Perspective
-#     P = np.eye(3)
-#     P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
-#     P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
+
 #
 #     # Rotation and Scale
 #     R = np.eye(3)

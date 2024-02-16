@@ -8,7 +8,7 @@ from PIL import Image, ImageStat
 from tqdm import tqdm
 IMG_TYPE = ['png','jpg','bmp']
 NORMAL_TYPE = ['png','jpg','bmp','txt','xml']
-dic = {'armor_sentry_blue':0,
+dic = {'armor_sentry_blue':0,  #
        'armor_sentry_red':1,
        'armor_sentry_none':2,
        'armor_hero_blue':3,

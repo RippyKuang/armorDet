@@ -3,7 +3,7 @@
 # Parameters
 nc: 80  # number of classes
 depth_multiple: 1  # model depth multiple
-width_multiple: 0.5 # layer channel multiple
+width_multiple: 0.625 # layer channel multiple
 anchors:
   - [10,13, 16,30, 33,23]  # P3/8
   - [30,61, 62,45, 59,119]  # P4/16
@@ -33,17 +33,17 @@ head:
    [-1, 1, nn.Upsample, [None, 2, 'nearest']],
    [[-1, 2], 1, Concat, [1]],  # cat backbone P3
    [-1, 1, C3, [128, False]],
-   [-1, 1, EMA, [128]],   # 15 (P3/8-small)
+  
  
    [-1, 1, Conv, [128, 3, 2]],
    [[-1, 11], 1, Concat, [1]],  # cat head P4
    [-1, 1, C3, [256, False]],  # 17 (P4/16-medium)
-   [-1, 1, EMA, [256]],  #19
+
  
    [-1, 1, Conv, [256, 3, 2]],
    [[-1, 7], 1, Concat, [1]],  # cat head P5
    [-1, 1, C3, [512, False]],  # 22 (P5/32-large)
  
-   [[15, 19, 22], 1, Detect, [nc, anchors]],  # Detect(P3, P4, P5)
+   [[15, 17, 20], 1, Detect, [nc, anchors]],  # Detect(P3, P4, P5)
   ]
  
