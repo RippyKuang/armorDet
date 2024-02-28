@@ -166,7 +166,8 @@ class ComputeLoss:
 
                     t[range(n), 3+tcls[i]//3] = ciou  #构造独热码
                     t[range(n), tcls[i]%3] = self.cp
-                    lcls =lcls+ self.BCEcls(pcls[:,:3], t[:,:3])*(1-iou).mean()+self.BCEcls(pcls[:,3:], t[:,3:])*(iou.mean())  # BCE
+                     
+                    lcls =lcls+self.BCEcls(pcls[:,:3], t[:,:3]) + self.BCEcls(pcls[:,3:], t[:,3:])  # BCE
  
             obji = self.BCEobj(pi[..., 8], tobj) 
             lobj += obji * self.balance[i]# obj loss

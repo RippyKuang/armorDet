@@ -179,7 +179,7 @@ def run(
             save_path = str(save_dir / p.name)  # im.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
             s += '%gx%g ' % im.shape[2:]  # print string
-            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0, 1, 0, 1, 0]]  # normalization gain whwh
             imc = im0.copy() if save_crop else im0  # for save_crop
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
@@ -210,15 +210,15 @@ def run(
                     cv2.putText(im0, label, [p1[0] - 20, p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
                     cv2.putText(im0, str(confidence), [p1[0], p1[1] - 10], thickness=1, color=(0, 0, 255), fontFace=1, fontScale=1)
 
-                    # confidence_str = f'{confidence:.2f}'
-                    # if save_csv:
-                    #     write_to_csv(p.name, label, confidence_str)
+                    confidence_str = f'{confidence:.2f}'
+                    if save_csv:
+                        write_to_csv(p.name, label, confidence_str)
                     
-                    # if save_txt:  # Write to file
-                    #     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                    #     line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                    #     with open(f'{txt_path}.txt', 'a') as f:
-                    #         f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                    if save_txt:  # Write to file
+                        xywh = (torch.tensor(xyxyxyxy).view(1, 8) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh)
+                        with open(f'{txt_path}.txt', 'a') as f:
+                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
                     
                     # if save_img or save_crop or view_img:  # Add bbox to image
                     #     c = int(cls)  # integer class

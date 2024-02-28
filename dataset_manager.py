@@ -47,7 +47,7 @@ def loadfolder(path,target_suffix):
         for fn in filenames:
             suf =fn.split('.')[-1]
             if suf in target_suffix:
-                target.append((dirpath,fn))
+                target.append([dirpath,fn])
             elif suf not in NORMAL_TYPE:
                 print(dirpath+'/'+fn)
     return target

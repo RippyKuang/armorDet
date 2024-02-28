@@ -191,7 +191,7 @@ def create_dataloader(path,
     return loader(dataset,
                   batch_size=batch_size,
                   shuffle=shuffle and sampler is None,
-                  num_workers=16,
+                  num_workers=nw,
                   sampler=sampler,
                   pin_memory=PIN_MEMORY,
                   collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn,
@@ -757,9 +757,11 @@ class LoadImagesAndLabels(Dataset):
 
         # 别的数据增强
         if self.augment:
-            # Albumentations
-            img, labels = self.albumentations(img, labels)
+        
             nl = len(labels)  # update after albumentations
+            if random.random() < 0.5:
+                ksize = int(random.choice(list(range(3, 7 + 1, 2))))
+                img = cv2.blur(img, (ksize,ksize))
 
             # HSV color-space
             augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
@@ -924,7 +926,7 @@ class LoadImagesAndLabels(Dataset):
         src_label = src_label - [min_x - padding_w,min_y - padding_h]*4 
 
         M = np.eye(3)
-        rad = math.atan((src_label[7]-src_label[1])/(src_label[6]-src_label[0]))
+        rad = math.atan((src_label[7]-src_label[1])/(src_label[6]-src_label[0]+0.001))
         M[:2] = cv2.getRotationMatrix2D(center, rad*57.3, 1)
         rotated_padded = cv2.warpAffine(img_padded, M[:2], (wm, hm))
 
