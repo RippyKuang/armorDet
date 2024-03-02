@@ -1041,3 +1041,27 @@ class Shuffle_Block(nn.Module):
  
         return out
  
+class DecoupledHead(nn.Module):
+    def __init__(self, ch=256, nc=80, anchors=()):
+        super().__init__()
+        self.nc = nc // 3  # number of classes
+        self.nl = len(anchors)  # number of detection layers
+        self.na = len(anchors[0]) // 2  # number of anchors
+        self.o = ch // 2
+        self.merge = Conv(ch, self.o, 1, 1)
+        self.cls_conv = Conv(self.o, self.o, 3, 1, 1)
+        self.reg_conv = Conv(self.o, self.o, 3, 1, 1)
+     
+        self.cls_preds = nn.Conv2d(self.o, (3+self.nc) * self.na, 1)
+        self.reg_preds = nn.Conv2d(self.o, (8 +1) * self.na, 1)
+       
+    def forward(self, x):
+        x = self.merge(x)
+        x1 = self.cls_conv(x)
+        x2 = self.reg_conv(x)
+
+        x1 = self.cls_preds(x1)
+        x2 = self.reg_preds(x2)
+      
+        out = torch.cat([x2, x1], 1)
+        return out

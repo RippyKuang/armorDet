@@ -65,6 +65,20 @@ def xyxyxyxyn2xyxyxyxy(x, w=640, h=640, padw=0, padh=0):
     y[..., 7] = h * x[..., 7] + padh
     return y
 
+def motion_blur(image, degree=10, angle=20):
+    image = np.array(image)
+    
+    # 这里生成任意角度的运动模糊kernel的矩阵， degree越大，模糊程度越高
+    M = cv2.getRotationMatrix2D((degree/2, degree/2), angle, 1)
+    motion_blur_kernel = np.diag(np.ones(degree))
+    motion_blur_kernel = cv2.warpAffine(motion_blur_kernel, M, (degree, degree))
+    
+    motion_blur_kernel = motion_blur_kernel / degree        
+    blurred = cv2.filter2D(image, -1, motion_blur_kernel)
+    # convert to uint8
+    cv2.normalize(blurred, blurred, 0, 255, cv2.NORM_MINMAX)
+    blurred = np.array(blurred, dtype=np.uint8)
+    return blurred
 
 def get_hash(paths):
     # Returns a single hash value of a list of paths (files or dirs)
@@ -759,10 +773,15 @@ class LoadImagesAndLabels(Dataset):
         if self.augment:
         
             nl = len(labels)  # update after albumentations
-            if random.random() < 0.5:
-                ksize = int(random.choice(list(range(3, 7 + 1, 2))))
-                img = cv2.blur(img, (ksize,ksize))
-
+            if random.random() < 0.1:
+                if random.random() < 0.5:
+                    ksize = int(random.choice(list(range(3, 7 + 1, 2))))
+                    img = cv2.blur(img, (ksize,ksize))
+                else:
+                    degree = int(random.choice(list(range(1,20, 2))))
+                    angle = int(random.choice([45,135,225,315]))
+                    img = motion_blur(img, degree,angle)
+            
             # HSV color-space
             augment_hsv(img, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
 
@@ -856,7 +875,7 @@ class LoadImagesAndLabels(Dataset):
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
                
-                img,labels = self.makeSentry(img.copy(),labels)
+               # img,labels = self.makeSentry(img.copy(),labels)
                 
 
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)

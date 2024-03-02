@@ -27,7 +27,7 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block)
+                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,DecoupledHead)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -58,7 +58,7 @@ class Detect(nn.Module):
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
         self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
         self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
-        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
+        self.m = nn.ModuleList(DecoupledHead(x, nc, anchors) for x in ch)
         self.inplace = inplace  # use inplace ops (e.g. slice assignment)
 
     def forward(self, x):
@@ -66,7 +66,8 @@ class Detect(nn.Module):
         #x是一个list，是detect层的输入，list的长度为3
         #shape分别是(n, 128, 80, 80)， (n, 256, 40, 40), (n, 512, 20, 20)
         for i in range(self.nl):   # nl:detect层的数目
-            x[i] = self.m[i](x[i])  # conv 输出 (bs,255,20,20)
+         
+            x[i] = self.m[i](x[i])
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
@@ -78,12 +79,14 @@ class Detect(nn.Module):
                     self.anchor_grid[i]=self.anchor_grid[i].repeat(1,1,1,1,4)
 
                
-                ep, conf,clr,cls = x[i].sigmoid().split((8,1,self.clr,self.nc), dim=-1)
+                ep,els = x[i].split((8,1+self.clr+self.nc), dim=-1)
+                conf,clr,cls = els.sigmoid().split((1,self.clr,self.nc), dim=-1)
+        
                 clr = clr.repeat(1,1,1,1,self.nc)
                 cls = cls.repeat_interleave(3,dim=-1)
                 cls = clr * cls
              
-                xy = (6*self.anchor_grid[i]*(ep - 0.5)+self.grid[i])*self.stride[i]
+                xy = (ep+self.grid[i])*self.stride[i]
                 y = torch.cat((xy, conf,cls), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.tno))
 
@@ -99,6 +102,8 @@ class Detect(nn.Module):
         anchor_grid = (self.anchors[i]).view((1, self.na, 1, 1, 2)).expand(shape)
         return grid, anchor_grid
 
+
+    
 
 class Segment(Detect):
     # YOLOv5 Segment head for segmentation models
@@ -199,7 +204,7 @@ class DetectionModel(BaseModel):
 
         # Build strides, anchors
         m = self.model[-1]  # Detect() 就是三层卷积
-        if isinstance(m, (Detect, Segment)):
+        if isinstance(m, (Detect, Segment,DecoupledHead)) :
             s = 256  # 2x min stride
             m.inplace = self.inplace
             forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)  # forward得到的是经过三个head conv后的张量，concat后得到的那个张量
@@ -207,7 +212,11 @@ class DetectionModel(BaseModel):
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            try :
+                self._initialize_biases()  # only run once
+                LOGGER.info('initialize_biases done')
+            except :
+                LOGGER.info('decoupled no biase ')
 
         # Init weights, biases
         initialize_weights(self)
@@ -265,11 +274,19 @@ class DetectionModel(BaseModel):
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module
-        for mi, s in zip(m.m, m.stride):  # from
+        for mi, s in zip(m.m2, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-            b.data[:, 5:5 + m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
+            b.data[:, 0] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
+          #  b.data[:, 5:5 + m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+        for mi, s in zip(m.m3, m.stride):  # from
+            b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
+         #   b.data[:, 0] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
+            b.data[:, 0:m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
+            mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+
+
+
 
 
 Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibility

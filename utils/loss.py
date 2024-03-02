@@ -148,8 +148,7 @@ class ComputeLoss:
             if n:
                 #pi[b, a, gj, gi] shape 712,85
                 pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
-                pep = 6*anchors[i].repeat(1,4)*(pep.sigmoid()  - 0.5) #将预测的点坐标变换到-1到1之间
-
+             
                 ciou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
                 iou = bbox_iou(pep,tbox[i],xywh=False).squeeze().detach()
 
@@ -164,7 +163,7 @@ class ComputeLoss:
                     #pcls shape:(808,80)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
 
-                    t[range(n), 3+tcls[i]//3] = ciou  #构造独热码
+                    t[range(n), 3+tcls[i]//3] = self.cp  #构造独热码
                     t[range(n), tcls[i]%3] = self.cp
                      
                     lcls =lcls+self.BCEcls(pcls[:,:3], t[:,:3]) + self.BCEcls(pcls[:,3:], t[:,3:])  # BCE
