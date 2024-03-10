@@ -173,7 +173,7 @@ def random_perspective(im,
 
     P = np.eye(3)
     P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
-    P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
+   # P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
 
     # Combined rotation matrix
     M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
