@@ -133,7 +133,7 @@ class ComputeLoss:
         lbox = torch.zeros(1, device=self.device)  # box loss
         lobj = torch.zeros(1, device=self.device)  # object loss
         lpts_sum = torch.zeros(1, device=self.device)  # object loss
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # 四个参数什么意思见最下面
+        tcls, tbox, indices = self.build_targets(p, targets)  # 四个参数什么意思见最下面
         #indices里的是坐标，tbox里的是偏移量 
         # Losses
         
@@ -208,7 +208,7 @@ class ComputeLoss:
             device=self.device).float() * g  # offsets 乘了个g，所以都是0.5
 
         for i in range(self.nl):    #对每个检测头进行遍历
-            anchors, shape = self.anchors[i], p[i].shape     #p[i]:[16,3,80,80,12] anchors:[3,3,2]
+            shape = p[i].shape     #p[i]:[16,3,80,80,12] anchors:[3,3,2]
             #shape  [batchsize,anchor box数量,特征图大小,特征图大小,80+4+1]
             gain[2:10] = torch.tensor(shape)[[3, 2, 3, 2, 3, 2, 3, 2]]  # xyxy 重复shape的第三二位
 
@@ -217,22 +217,7 @@ class ComputeLoss:
             t = targets * gain  # target shape(3,n,11)
     
             if nt:  #nt是gt box的数量
-                # Matches
-                x_max=torch.max(t[...,[2,4,6,8]],dim=2,keepdim=True)[0]
-                x_min=torch.min(t[...,[2,4,6,8]],dim=2,keepdim=True)[0]
-                y_max=torch.max(t[...,[3,5,7,9]],dim=2,keepdim=True)[0]
-                y_min=torch.min(t[...,[3,5,7,9]],dim=2,keepdim=True)[0]
-                w_ = (x_max - x_min)
-                h_ = (y_max - y_min)
-                gwh = torch.cat((w_,h_),dim=-1)
-                r = gwh / anchors[:, None]  # shape为[3,nt,2] 2是gt box的w和h与anchor的w和h的比值 anchors[:, None] 的形状为3,1,2
-                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  #当gt box的w和h与anchor的w和h的比值比设置的超参数anchor_t大时，则此gt box去除
-                # j的形状是(3,nt),里面的值均为true或false
-                t = t[j]  # 过滤掉不合适的gtbox
-
-                # Offsets
-                # t的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h,anchor的索引)
-            
+                         
                 gc = torch.cat((torch.sum(t[:,[2,4,6,8]],dim=-1,keepdim=True),torch.sum(t[:,[3,5,7,9]],dim=-1,keepdim=True)),dim=1)/4
                 gci = gain[2:4] - gc
                 #g是0.5
@@ -289,7 +274,7 @@ class ComputeLoss:
             #     (51.7 - 51 = 0.7, 44.8 - 44 = 0.8)
             #     (51.7 - 51 = 0.7, 44.8 - 45 = -0.2)
             #     (51.7 - 52 = -0.3, 44.8 - 44 = 0.8)
-            anch.append(anchors[a])  # shape为(3, ([712, 2]))， 表示每个检测头对应的712个gt box所对应的anchor。
+         
             tcls.append(c)  # shape为(3, 712), 表示3个检测头对应的gt box的类别。 
 
-        return tcls, tbox, indices, anch
+        return tcls, tbox, indices

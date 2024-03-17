@@ -875,8 +875,8 @@ class LoadImagesAndLabels(Dataset):
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
-               
-               # img,labels = self.makeSentry(img.copy(),labels)
+                # if random.random() < 0.4:
+                #     img,labels = self.makeSentry(img.copy(),labels)
                 
 
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
