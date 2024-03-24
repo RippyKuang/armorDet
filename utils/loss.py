@@ -177,9 +177,6 @@ class ComputeKLoss:
         clr_preds = outputs[:, :, 8:11]  # [batch, n_anchors_all, 1]
         cls_preds = outputs[:, :, 11:]  # [batch, n_anchors_all, n_cls]
 
-     
-    
-
         total_num_anchors = outputs.shape[1]  #6400+1600+400
         x_shifts = torch.cat(x_shifts, 1)  # [1, 8400]
         y_shifts = torch.cat(y_shifts, 1)  # [1, n_anchors_all]
@@ -252,35 +249,33 @@ class ComputeKLoss:
  
 
         _cls_targets = torch.cat(cls_targets, 0)
-        _clr_targets = torch.cat(clr_targets, 0)
+        clr_targets = torch.cat(clr_targets, 0)
         reg_targets = torch.cat(reg_targets, 0)
-   
+
         fg_masks = torch.cat(fg_masks, 0)
      
-        # cls_preds = cls_preds.view(-1, self.nc)
-        # clr_preds = clr_preds.view(-1, self.clr)
+        cls_preds = cls_preds.view(-1, self.nc)
 
-        # cls_targets = torch.zeros_like(cls_preds)
-        # cls_targets[fg_masks] = _cls_targets
-        
-        # clr_targets = torch.zeros_like(clr_preds)
-        # clr_targets[fg_masks] = _clr_targets
-      
+        cls_targets = torch.zeros_like(cls_preds)
+        cls_targets[fg_masks] = _cls_targets
+        target_cls_sum = max(_cls_targets.sum(), 1)
+
       
         num_fg = max(num_fg, 1)
         
         loss_iou =  (1.0 - bbox_iou(bbox_preds.view(-1, 8)[fg_masks], reg_targets,xywh=False,CIoU=True).squeeze()).sum() / num_fg
-     
-        loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / num_fg
+      
+        loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / target_cls_sum
         loss_clr = self.bcewithlog_loss(clr_preds, clr_targets.float()).sum() / num_fg
        
         loss_l1 = (self.l1_loss(bbox_preds.view(-1, 8)[fg_masks], reg_targets)).sum() / num_fg
 
         reg_weight = 8.0
+        cls_weight = 0.5
         l1_weight = 0.2
-        loss = reg_weight * loss_iou  + loss_cls + l1_weight * loss_l1 +loss_clr
+        loss = reg_weight * loss_iou  + cls_weight*loss_cls + l1_weight * loss_l1 +loss_clr
 
-        return loss, torch.cat((reg_weight*loss_iou.reshape(1), loss_cls.reshape(1), (loss_clr).reshape(1),l1_weight * loss_l1.reshape(1))).detach()
+        return loss, torch.cat((reg_weight*loss_iou.reshape(1), cls_weight*loss_cls.reshape(1), (loss_clr).reshape(1),l1_weight * loss_l1.reshape(1))).detach()
     
     @torch.no_grad()
     def get_assignments(
