@@ -1050,23 +1050,32 @@ class DecoupledHead(nn.Module):
         self.nc = nc // 3  # number of classes
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
-        self.o = ch // 2
-        self.merge = Conv(ch, self.o, 1, 1)
-        self.cls_conv = Conv(self.o, self.o, 3, 1, 1)
-        self.reg_conv = Conv(self.o, self.o, 3, 1, 1)
-     
-        self.cls_preds = nn.Conv2d(self.o, (3+self.nc) * self.na, 1)
-        self.reg_preds = nn.Conv2d(self.o, (8 +1) * self.na, 1)
+      
+        self.clso =(3+self.nc)*2
+        self.rego = 32
+
+        self.cls_merge = Conv(ch,self.clso, 3, 1, 1)
+        self.reg_merge = Conv(ch, self.rego, 3, 1, 1)
+
+        self.cls_conv = Conv(self.clso, self.clso, 3, 1, 1)
+        self.reg_conv = Conv(self.rego,  self.rego, 3, 1, 1,g=8)
+    
+        self.cls_preds = nn.Conv2d( self.clso, (self.nc+3) * self.na, 1)
+        self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 8)
+   
+        
        
     def forward(self, x):
-        x = self.merge(x)
-        x1 = self.cls_conv(x)
-        x2 = self.reg_conv(x)
-
+        x_cls = self.cls_merge(x)
+        x_reg = self.reg_merge(x)
+    
+        x1 = self.cls_conv(x_cls) 
+        x2 = self.reg_conv(x_reg) 
+    
         x1 = self.cls_preds(x1)
         x2 = self.reg_preds(x2)
-      
-        out = torch.cat([x2, x1], 1)
+
+        out = torch.cat([x2,x1], 1)
         return out
 
 
@@ -1107,7 +1116,6 @@ class Silence(nn.Module):
         super(Silence, self).__init__()
     def forward(self, x):    
         return x
-    
 class CBLinear(nn.Module):
     def __init__(self, c1, c2s, k=1, s=1, p=None, g=1):  # ch_in, ch_outs, kernel, stride, padding, groups
         super(CBLinear, self).__init__()
@@ -1118,12 +1126,3 @@ class CBLinear(nn.Module):
         outs = self.conv(x).split(self.c2s, dim=1)
         return outs
 
-class CBFuse(nn.Module):
-    def __init__(self, idx):
-        super(CBFuse, self).__init__()
-        self.idx = idx
-
-    def forward(self, xs):
-        target_size = xs[-1].shape[2:]
-        res = [F.interpolate(x[self.idx[i]], size=target_size, mode='nearest') for i, x in enumerate(xs[:-1])]
-        out = torch.sum(torch.stack(res + xs[-1:]), dim=0)
