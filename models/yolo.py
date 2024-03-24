@@ -27,7 +27,7 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,DecoupledHead)
+                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,DecoupledHead,C2f,Silence,CBLinear,CBFuse)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -51,12 +51,12 @@ class Detect(nn.Module):
         super().__init__()
         self.clr = 3
         self.nc = nc // self.clr  # number of classes
-        self.no = self.clr + self.nc + 9  # number of outputs per anchor +xyxyxyxy conf
-        self.tno = self.clr*self.nc + 9
+        self.no = self.clr + self.nc + 8  # number of outputs per anchor +xyxyxyxy conf
+        self.tno = self.clr*self.nc + 8
         self.nl = len(anchors)  # number of detection layers 每层有一个anchor
         self.na = len(anchors[0]) // 2  # number of anchors 每个anchor有两个参数，所以除以二
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
-        self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
+     
         self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
         self.m = nn.ModuleList(DecoupledHead(x, nc, anchors) for x in ch)
         self.inplace = inplace  # use inplace ops (e.g. slice assignment)
@@ -69,25 +69,25 @@ class Detect(nn.Module):
          
             x[i] = self.m[i](x[i])
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            x[i] = x[i].view(bs,self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
 
             if not self.training:  # inference 如果是推断
                 #预测的box的中心点x和y是相对位置, 在推理的时候,需要映射到原图上,因此需要先加上grid的坐标,再乘以stride映射回原图
-                if self.dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
-                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
-                    self.grid[i]=self.grid[i].repeat(1,1,1,1,4)
-                    self.anchor_grid[i]=self.anchor_grid[i].repeat(1,1,1,1,4)
+                if self.dynamic or self.grid[i].shape[1:3] != x[i].shape[1:3]:
+                    self.grid[i] = self._make_grid(nx, ny, i)
+                    self.grid[i]=self.grid[i].repeat(1,1,1,4)
+                
 
                
-                ep,els = x[i].split((8,1+self.clr+self.nc), dim=-1)
-                conf,clr,cls = els.sigmoid().split((1,self.clr,self.nc), dim=-1)
+                ep,els = x[i].split((8,self.clr+self.nc), dim=-1)
+                clr,cls = els.sigmoid().split((self.clr,self.nc), dim=-1)
         
-                clr = clr.repeat(1,1,1,1,self.nc)
+                clr = clr.repeat(1,1,1,self.nc)
                 cls = cls.repeat_interleave(3,dim=-1)
                 cls = clr * cls
              
                 xy = (ep+self.grid[i])*self.stride[i]
-                y = torch.cat((xy, conf,cls), -1)
+                y = torch.cat((xy,cls), -1)
                 z.append(y.view(bs, self.na * nx * ny, self.tno))
 
         return x if self.training else (torch.cat(z, 1), ) if self.export else (torch.cat(z, 1), x)
@@ -95,12 +95,12 @@ class Detect(nn.Module):
     def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
         d = self.anchors[i].device
         t = self.anchors[i].dtype
-        shape = 1, self.na, ny, nx, 2  # grid shape
+        shape = 1, ny, nx, 2  # grid shape
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
         yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)  # torch>=0.7 compatibility
         grid = torch.stack((xv, yv), 2).expand(shape)  # add grid offset, i.e. y = 2.0 * x - 0.5
-        anchor_grid = (self.anchors[i]).view((1, self.na, 1, 1, 2)).expand(shape)
-        return grid, anchor_grid
+     
+        return grid
 
 
     
@@ -173,8 +173,7 @@ class BaseModel(nn.Module):
         if isinstance(m, (Detect, Segment)):
             m.stride = fn(m.stride)
             m.grid = list(map(fn, m.grid))
-            if isinstance(m.anchor_grid, list):
-                m.anchor_grid = list(map(fn, m.anchor_grid))
+
         return self
 
 
@@ -204,7 +203,7 @@ class DetectionModel(BaseModel):
 
         # Build strides, anchors
         m = self.model[-1]  # Detect() 就是三层卷积
-        if isinstance(m, (Detect, Segment,DecoupledHead)) :
+        if isinstance(m, (Detect, Segment)) :
             s = 256  # 2x min stride
             m.inplace = self.inplace
             forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)  # forward得到的是经过三个head conv后的张量，concat后得到的那个张量
@@ -212,11 +211,8 @@ class DetectionModel(BaseModel):
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            try :
-                self._initialize_biases()  # only run once
-                LOGGER.info('initialize_biases done')
-            except :
-                LOGGER.info('decoupled no biase ')
+            self._initialize_biases()  # only run once
+            
 
         # Init weights, biases
         initialize_weights(self)
@@ -274,16 +270,17 @@ class DetectionModel(BaseModel):
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module
-        for mi, s in zip(m.m2, m.stride):  # from
-            b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 0] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-          #  b.data[:, 5:5 + m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
-            mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
-        for mi, s in zip(m.m3, m.stride):  # from
-            b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-         #   b.data[:, 0] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-            b.data[:, 0:m.nc] += math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())  # cls
-            mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+        prior_prob = 1e-2
+        for mi, s in zip(m.m, m.stride):  # from
+            mi_cls = mi.cls_preds
+            b_cls = mi_cls.bias.view(1, -1)  # conv.bias(255) to (3,85)
+            b_cls.data[3:] += math.log(5 / m.nc / (640 / s) ** 2) 
+            mi_cls.bias = torch.nn.Parameter(b_cls.view(-1), requires_grad=True)
+            
+                
+       
+
+                
 
 
 
@@ -351,13 +348,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in {
                 Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA,CBRM,Shuffle_Block}:
+                BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA,CBRM,Shuffle_Block,C2f,Silence,CBLinear,CBFuse}:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:
+            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x,C2f,CBLinear,CBFuse}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:

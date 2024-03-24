@@ -782,8 +782,8 @@ def xyxyxyxyn(x, w=640, h=640, clip=False, eps=0.0):
     if clip:
         clip_boxes(x, (h - eps, w - eps))  # warning: inplace clip
     y = x.clone() if isinstance(x, torch.Tensor) else np.copy(x)
-    y[..., [0,2,4,6]] = ((x[..., [0,2,4,6]])) / w  # x center
-    y[..., [1,3,5,7]] = ((x[..., [1,3,5,7]])) / h  # y center
+    y[..., [0,2,4,6]] = ((x[..., [0,2,4,6]]))   # x center
+    y[..., [1,3,5,7]] = ((x[..., [1,3,5,7]]))   # y center
   
     return y
 
@@ -928,14 +928,15 @@ def non_max_suppression(
     assert 0 <= iou_thres <= 1, f'Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0'
     if isinstance(prediction, (list, tuple)):  # YOLOv5 model in validation model, output = (inference_out, loss_out)
         prediction = prediction[0]  # select only inference output
-
+  
     device = prediction.device
     mps = 'mps' in device.type  # Apple MPS
     if mps:  # MPS not fully supported yet, convert tensors to CPU before NMS
         prediction = prediction.cpu()
     bs = prediction.shape[0]  # batch size
-    nc = prediction.shape[2] - nm - 9 # number of classes
-    xc = prediction[...,8] > conf_thres  # candidates
+    nc = prediction.shape[2] - nm - 8 # number of classes
+    mi = 8 + nc  # mask start index
+    xc = prediction[:, :,8:mi].amax(-1) > conf_thres  # candidates
 
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
@@ -946,7 +947,7 @@ def non_max_suppression(
     merge = False  # use merge-NMS
 
     t = time.time()
-    mi = 9 + nc  # mask start index
+    
     output_xyxy = [torch.zeros((0, 6), device=prediction.device)] * bs
     output_ep = [torch.zeros((0, 10), device=prediction.device)] * bs
     for xi, _x in enumerate(prediction):  # image index, image inference
@@ -958,23 +959,20 @@ def non_max_suppression(
             continue
 
         # Compute conf
-        _x[:, 9:] *= _x[:, 8:9]  # conf = obj_conf * cls_conf
+        
 
         # Box/Mask
 
         box = xyxyxyxy2xyxy(_x[:, :8])  # center_x, center_y, width, height) to (x1, y1, x2, y2)
 
         # Detections matrix nx6 (xyxy, conf, cls)
-        conf, j = _x[:, 9:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
+        conf, j = _x[:, 8:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
         thres_ = conf.view(-1) > conf_thres
         x = torch.cat((box, conf, j.float()), 1)[thres_] #0-3是box，4是置信度，5是类别
         x_ep = torch.cat((_x[:, :8], conf,j.float()),1)[thres_]
         # 从这里开始x的格式都是xyxy
         
-
-        # Apply finite constraint
-        # if not torch.isfinite(x).all():
-        #     x = x[torch.isfinite(x).all(1)]
+        x = x[torch.isfinite(x).all(1)]
 
         # Check shape
         n = x.shape[0]  # number of boxes

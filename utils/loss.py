@@ -7,8 +7,9 @@ from math import sqrt
 import torch
 import torch.nn as nn
 
-from utils.metrics import bbox_iou
+from utils.metrics import bbox_iou, xyxyxyxy2xyxy
 from utils.torch_utils import de_parallel
+import torch.nn.functional as F
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
@@ -89,207 +90,379 @@ class QFocalLoss(nn.Module):
             return loss
 
 
-class ComputeLoss:
+
+
+class ComputeKLoss:
     sort_obj_iou = False
 
     # Compute losses
     def __init__(self, model, autobalance=True):
         device = next(model.parameters()).device  # get model device
-        h = model.hyp  # hyperparameters
-
-        # Define criteria
-        BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device))
-        BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device))
-
-        # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
-        self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))  # positive, negative BCE targets
-    
-        # Focal loss
-        g = h['fl_gamma']  # focal loss gamma
-        if g > 0:
-            BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
 
         m = de_parallel(model).model[-1]  # Detect() module
-        self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  #m.nl为3, balance仍未[4.0, 1.0, 0.4]
-        self.ssi = list(m.stride).index(16) if autobalance else 0  # det.stride是[ 8., 16., 32.]， self.ssi表示stride为16的索引，当autobalance为true时，self.ssi为1.
-        self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
-        self.l1 = nn.SmoothL1Loss(reduction='mean')
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
         self.nl = m.nl  # number of layers
-        self.anchors = m.anchors  #[3,3,2]
+  
         self.device = device
+        self.clr = 3
+        self.strides = [8,16,32]
+        self.grids = [torch.zeros(1)]*( self.nc+3 +8+1)
+        self.use_l1 = False
+
+        self.l1_loss =nn.SmoothL1Loss(reduction='none')
+        self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
+        
+       
 
     def __call__(self, p, targets):  # predictions, targets
-        #p 是每个预测头输出的结果
-        #    [p[0].shape： torch.Size([16, 3, 80, 80, 85])  [batchsize,anchor box数量,特征图大小,特征图大小,80+4+1]
-        #     p[1].shape： torch.Size([16, 3, 40, 40, 85])
-        #     p[2].shape： torch.Size([16, 3, 20, 20, 85])
-        #    ]
- 
-        # targets: gt box信息，维度是(n, 6)，其中n是整个batch的图片里gt box的数量，以下都以gt box数量为190来举例。
-        # 6的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h)
-        lcls = torch.zeros(1, device=self.device)  # class loss
-        lbox = torch.zeros(1, device=self.device)  # box loss
-        lobj = torch.zeros(1, device=self.device)  # object loss
-        lpts_sum = torch.zeros(1, device=self.device)  # object loss
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # 四个参数什么意思见最下面
-        #indices里的是坐标，tbox里的是偏移量 
-        # Losses
+        
+        x_shifts = []
+        y_shifts = []
+        grids = []
+        expanded_strides = []
+        outputs = []
         
         for i, pi in enumerate(p):  # layer index, layer predictions
+            pi, grid = self.get_output_and_grid(pi, i, self.strides[i], p[0].type())
+            x_shifts.append(grid[:, :, 0])
+            y_shifts.append(grid[:, :, 1])
+            expanded_strides.append(
+                    torch.zeros(1, grid.shape[1])
+                    .fill_(self.strides[i])
+                    .type_as(p[0])
+                )
+            grids.append(grid)
+            outputs.append(pi)
+        return self.get_losses(
+                x_shifts,
+                y_shifts,
+                grids,
+                expanded_strides,
+                targets,
+                torch.cat(outputs, 1),
+                dtype=p[0].dtype,
+            )           
            
-            b, a, gj, gi = indices[i]  # image index,anchor index，预测该gt box的网格y坐标，预测该gt box的网格x坐标。
-            tobj = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)  # target obj
-            #tobj shape: torch.Size([16, 3, 80, 80])
-            #pi shape： torch.Size([16, 3, 80, 80, 85]) 8 16 32
-            n = b.shape[0]  # number of targets 下文中的712
-          
-            if n:
-                #pi[b, a, gj, gi] shape 712,85
-                pep, _, pcls = pi[b, a, gj, gi].tensor_split((8, 9), dim=1)  # faster, requires torch 1.8.0
-             
-                ciou = bbox_iou(pep,tbox[i],xywh=False,CIoU=True).squeeze()
-                iou = bbox_iou(pep,tbox[i],xywh=False).squeeze().detach()
-
-                lpts =  self.l1(pep,tbox[i])*(2**i)
-                lbox += (1.0 - ciou).mean()*(1-iou).mean() +lpts*(iou.mean()) # iou loss
-                lpts_sum +=torch.sum(torch.abs(pep-tbox[i]),dim=-1).mean()*(2**i)
-                ciou = ciou.detach().clamp(0).type(tobj.dtype)
-              
-                tobj[b, a, gj, gi] = ciou  # iou ratio
-
-                if self.nc > 1:  # cls loss (only if multiple classes) 
-                    #pcls shape:(808,80)
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-
-                    t[range(n), 3+tcls[i]//3] = self.cp  #构造独热码
-                    t[range(n), tcls[i]%3] = self.cp
-                     
-                    lcls =lcls+self.BCEcls(pcls[:,:3], t[:,:3]) + self.BCEcls(pcls[:,3:], t[:,3:])  # BCE
- 
-            obji = self.BCEobj(pi[..., 8], tobj) 
-            lobj += obji * self.balance[i]# obj loss
-            if self.autobalance:
-                self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
-
-        if self.autobalance:
-            self.balance = [x / self.balance[self.ssi] for x in self.balance]
-        lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
-        lcls *= self.hyp['cls']
-        bs = tobj.shape[0]  # batch size
-
-        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls,lpts_sum)).detach()
-
-    def build_targets(self, p, targets):
-        # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-        # 该函数主要是处理gt box，先介绍一下gt box的整体处理策略：
-        # 1、将gt box复制3份，原因是有三种长宽的anchor， 每种anchor都有gt box与其对应，也就是在筛选之前，一个gt box有三种anchor与其对应。
-        # 2、过滤掉gt box的w和h与anchor的w和h的比值大于设置的超参数anchor_t的gt box。
-        # 3、剩余的gt box，每个gt box使用至少三个方格来预测，一个是gt box中心点所在方格，另两个是中心点离的最近的两个方格，如下图
-        na, nt = self.na, targets.shape[0]  # number of anchors一般是3, nt是这个bs中所有的gt box数量
-        tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(11, device=self.device)  # 7个数，前6个数对应targets的第二维度6 normalized to gridspace gain
-        #ai:anchor的索引，shape为(3, gt box的数量)， 3行里，第一行全是0， 第2行全是1， 第三行全是2，表示每个gt box都对应到3个anchor上。
-        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), 2)  # 加上anchor的索引，把target重复三边 (3,nt,7),targets[0][0]和target[1][0]都属
-                                                                           #长度为7的张量，他们的差别只有最后一位 anchor的索引不同
-        g = 0.5  # bias
-        off = torch.tensor(
-            [
-                [0, 0],
-                [1, 0],
-                [0, 1],
-                [-1, 0],
-                [0, -1],  # j,k,l,m
-                # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
-            ],
-            device=self.device).float() * g  # offsets 乘了个g，所以都是0.5
-
-        for i in range(self.nl):    #对每个检测头进行遍历
-            anchors, shape = self.anchors[i], p[i].shape     #p[i]:[16,3,80,80,12] anchors:[3,3,2]
-            #shape  [batchsize,anchor box数量,特征图大小,特征图大小,80+4+1]
-            gain[2:10] = torch.tensor(shape)[[3, 2, 3, 2, 3, 2, 3, 2]]  # xyxy 重复shape的第三二位
-
-            # Match targets to anchors
-            #2：10代表target里的xyxyxyxy,因为是归一化后的,所以需要乘上xyxy来恢复原先的尺度
-            t = targets * gain  # target shape(3,n,11)
     
-            if nt:  #nt是gt box的数量
-                # Matches
-                x_max=torch.max(t[...,[2,4,6,8]],dim=2,keepdim=True)[0]
-                x_min=torch.min(t[...,[2,4,6,8]],dim=2,keepdim=True)[0]
-                y_max=torch.max(t[...,[3,5,7,9]],dim=2,keepdim=True)[0]
-                y_min=torch.min(t[...,[3,5,7,9]],dim=2,keepdim=True)[0]
-                w_ = (x_max - x_min)
-                h_ = (y_max - y_min)
-                gwh = torch.cat((w_,h_),dim=-1)
-                r = gwh / anchors[:, None]  # shape为[3,nt,2] 2是gt box的w和h与anchor的w和h的比值 anchors[:, None] 的形状为3,1,2
-                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  #当gt box的w和h与anchor的w和h的比值比设置的超参数anchor_t大时，则此gt box去除
-                # j的形状是(3,nt),里面的值均为true或false
-                t = t[j]  # 过滤掉不合适的gtbox
+    
+    def get_output_and_grid(self, output, k, stride, dtype):
+        grid = self.grids[k]
 
-                # Offsets
-                # t的每一个维度为(图片在batch中的索引， 目标类别， x, y, w, h,anchor的索引)
-            
-                gc = torch.cat((torch.sum(t[:,[2,4,6,8]],dim=-1,keepdim=True),torch.sum(t[:,[3,5,7,9]],dim=-1,keepdim=True)),dim=1)/4
-                gci = gain[2:4] - gc
-                #g是0.5
-                #下面是寻找另外两个负责该gt的gird
-                # 以图像左上角为原点的坐标，取中心点的小数部分，小数部分小于0.5的为ture，大于0.5的为false。
-                # j和k的shape都是(239)，true的位置分别表示靠近方格左边的gt box和靠近方格上方的gt box。 
-                _j, _k = ((gc % 1 < g) & (gc > 1)).T 
-                #以图像右下角为原点的坐标，取中心点的小数部分，小数部分小于0.5的为ture，大于0.5的为false。
-                #l和m的shape都是(239)，true的位置分别表示靠近方格右边的gt box和靠近方格下方的gt box。
-                _l, _m = ((gci % 1 < g) & (gci > 1)).T   #大于1是为了防止超出边界
-                j = torch.stack((torch.ones_like(_j),_j, _k,_l,_m)) #j的shape为(5, 239)
-                t = t.repeat((5, 1, 1))[j] #将t复制五遍，用j过滤
+        batch_size = output.shape[0]
+        n_ch = self.nc +8+3
+        hsize, wsize = output.shape[-3:-1]
+        if grid.shape[2:4] != output.shape[1:3]:
+            yv, xv = torch.meshgrid([torch.arange(hsize), torch.arange(wsize)])
+            grid = torch.stack((xv, yv), 2).view(1, 1, hsize, wsize, 2).type(dtype)
+            self.grids[k] = grid
+
+        output = output.view(batch_size, 1,  hsize, wsize,n_ch).reshape(batch_size, hsize * wsize, -1)
+        grid = grid.view(1, -1, 2)
+        output[..., :8] = (output[..., :8] + grid.repeat(1,1,4)) * stride
+       
+        return output, grid
+    
+    def get_losses(
+        self,
+        x_shifts,          #0.shape 1,6400 1.shape 1,1600   2.shape 1,400
+        y_shifts,          #same as x_shifts
+        grids,             #0.shape 1,6400,2 coord to outputs
+        expanded_strides,  #8*6400,16*1600,32*400
+        yolo_labels,       #abs coord
+        outputs,           #abs coord
+        dtype,             #torch.float32
+    ):
+        bbox_preds = outputs[:, :, :8]  # [batch, n_anchors_all, 4]
+        clr_preds = outputs[:, :, 8:11]  # [batch, n_anchors_all, 1]
+        cls_preds = outputs[:, :, 11:]  # [batch, n_anchors_all, n_cls]
+
+     
+    
+
+        total_num_anchors = outputs.shape[1]  #6400+1600+400
+        x_shifts = torch.cat(x_shifts, 1)  # [1, 8400]
+        y_shifts = torch.cat(y_shifts, 1)  # [1, n_anchors_all]
+        expanded_strides = torch.cat(expanded_strides, 1)
+        grids = torch.cat(grids, 1)
+      
+
+        cls_targets = []
+        clr_targets = []
+        reg_targets = []
+    
+        fg_masks = []
+
+        num_fg = 0.0
+        num_gts = 0.0
+
+        for batch_idx in range(outputs.shape[0]):
+            labels = yolo_labels[yolo_labels[:,0]==batch_idx]
+            num_gt = len(labels)
+            num_gts += num_gt
+            if num_gt == 0:
+                cls_target = outputs.new_zeros((0, self.nc))
+                clr_target = outputs.new_zeros((0, self.clr))
+                reg_target = outputs.new_zeros((0, 8))
               
-                #之前的shape为(239, 7)， 这里将t复制5个，大小变成了[5, 239, 7]然后使用j来过滤，
-                # 假设过滤后的t shape为(712,7)
-                #第一个t是保留所有的gt box，因为上一步里面增加了一个全为true的维度，
-                #第二个t保留了靠近方格左边的gt box，
-                #第三个t保留了靠近方格上方的gt box，
-                #第四个t保留了靠近方格右边的gt box，
-                #第五个t保留了靠近方格下边的gt box，
-               
-                offsets = (torch.zeros_like(gc)[None] + off[:, None])[j]
-                gc =gc.repeat((5, 1, 1))[j]
-        
-
-                # 第一个t保留所有的gt box偏移量为[0, 0], 即不做偏移
-                # 第二个t保留的靠近方格左边的gt box，偏移为[0.5, 0]，即向左偏移0.5(后面代码是用gxy - offsets，所以正0.5表示向左偏移)，则偏移到左边方格，表示用左边的方格来预测
-                # 第三个t保留的靠近方格上方的gt box，偏移为[0, 0.5]，即向上偏移0.5，则偏移到上边方格，表示用上边的方格来预测
-                # 第四个t保留的靠近方格右边的gt box，偏移为[-0.5, 0]，即向右偏移0.5，则偏移到右边方格，表示用右边的方格来预测
-                # 第五个t保留的靠近方格下边的gt box，偏移为[0, 0.5]，即向下偏移0.5，则偏移到下边方格，表示用下边的方格来预测
-                 #offsets的shape为(712, 2), 表示保留下来的712个gt box的x, y对应的偏移，
-                # 一个gt box的中心点x坐标要么是靠近方格左边，要么是靠近方格右边，y坐标要么是靠近方格上边，要么是靠近方格下边，
-                # 所以一个gt box在以上五个t里面，会有三个t是true。
-                # 也即一个gt box有三个方格来预测，一个是中心点所在方格，另两个是离的最近的两个方格。
+                fg_mask = outputs.new_zeros(total_num_anchors).bool()
             else:
-                t = targets[0]
-                offsets = 0
-            
-            bc, gt,a = torch.split(t, [2,8,1],dim=-1)  # (image, class), grid xy, grid wh, anchors
-            a, (b, c) = a.long().view(-1), bc.long().T  # anchors:(712,1),表示anchor的索引, image, class
-            gij = (gc - offsets).long()  #转换成了整形，是预测该gtbox的网格坐标，这样下面gxy - gij得到的不是offsets，而是相对该网格的偏移量
-            gi, gj = gij.T  # grid indices
+                gt_bboxes_per_image = labels[:, 2:] 
+                gt_classes = labels[:, 1]
+                bboxes_preds_per_image = bbox_preds[batch_idx]
+
+        
+                (
+                        gt_matched_classes,
+                        fg_mask,
+                        pred_ious_this_matching,
+                        matched_gt_inds,
+                        num_fg_img,
+                ) = self.get_assignments(  # noqa
+                        batch_idx,
+                        num_gt,
+                        gt_bboxes_per_image,
+                        gt_classes,
+                        bboxes_preds_per_image,
+                        expanded_strides,
+                        x_shifts,
+                        y_shifts,
+                        cls_preds,
+                        clr_preds,
+                )
+                
+                torch.cuda.empty_cache()
+                num_fg += num_fg_img
+
+                cls_target = F.one_hot(
+                    gt_matched_classes.to(torch.int64) // 3, self.nc
+                ) * pred_ious_this_matching.unsqueeze(-1)
+                clr_target = F.one_hot(
+                    gt_matched_classes.to(torch.int64) % 3, self.clr
+                )
+         
+                reg_target = gt_bboxes_per_image[matched_gt_inds]
+               
+
+            cls_targets.append(cls_target)
+            clr_targets.append(clr_target)
+            reg_targets.append(reg_target)
+
+            fg_masks.append(fg_mask)
+ 
+
+        _cls_targets = torch.cat(cls_targets, 0)
+        clr_targets = torch.cat(clr_targets, 0)
+        reg_targets = torch.cat(reg_targets, 0)
+   
+        fg_masks = torch.cat(fg_masks, 0)
+
+        cls_preds = cls_preds.view(-1, self.nc)
+        cls_targets = torch.zeros_like(cls_preds)
+        cls_targets[fg_masks] = _cls_targets
+        target_cls_sum = max(_cls_targets.sum(), 1)
+        
+      
+      
+        num_fg = max(num_fg, 1)
+        
+        loss_iou =  (1.0 - bbox_iou(bbox_preds.view(-1, 8)[fg_masks], reg_targets,xywh=False,CIoU=True).squeeze()).sum() / num_fg
+     
+        loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / target_cls_sum
+        loss_clr = self.bcewithlog_loss(clr_preds.view(-1, self.clr)[fg_masks], clr_targets.float()).sum() / num_fg
+       
+        loss_l1 = (self.l1_loss(bbox_preds.view(-1, 8)[fg_masks], reg_targets)).sum() / num_fg
+
+        reg_weight = 8.0
+        cls_weight = 0.5
+        l1_weight = 0.2
+        loss = reg_weight * loss_iou  + cls_weight*loss_cls + l1_weight * loss_l1 +loss_clr
+
+        return loss, torch.cat((reg_weight*loss_iou.reshape(1), cls_weight*loss_cls.reshape(1), (loss_clr).reshape(1),l1_weight * loss_l1.reshape(1))).detach()
+    
+    @torch.no_grad()
+    def get_assignments(
+        self,
+        batch_idx,
+        num_gt,
+        gt_bboxes_per_image,
+        gt_classes,
+        bboxes_preds_per_image, #8400,8
+        expanded_strides,
+        x_shifts,
+        y_shifts,
+        cls_preds,
+        clr_preds,
+        ):
 
 
-            # Append 一共三次循环，一次循环append一个最高维度
-            indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))  # image, anchor, grid
-            # indices的shape为(3, ([712], [712], [712], [712])), 
-            # 4个808分别表示每个gt box(包括偏移后的gt box)在batch中的image index， anchor index， 预测该gt box的网格y坐标， 预测该gt box的网格x坐标。
-            tbox.append(gt - gij.repeat(1,4))  # box
-            # 假如tbox的shape为(3, ([712, 4]))， 表示3个检测头对应的gt box的xywh， 其中x和y已经减去了预测方格的整数坐标，
-            # 比如原始的gt box的中心坐标是(51.7, 44.8)，则该gt box由方格(51, 44)，以及离中心点最近的两个方格(51, 45)和(52, 44)来预测(见build_targets函数里的解析),
-            # 换句话说这三个方格预测的gt box是同一个，其中心点是(51.7, 44.8)，但tbox保存这三个方格预测的gt box的xy时，保存的是针对这三个方格的偏移量,
-            # 分别是：
-            #     (51.7 - 51 = 0.7, 44.8 - 44 = 0.8)
-            #     (51.7 - 51 = 0.7, 44.8 - 45 = -0.2)
-            #     (51.7 - 52 = -0.3, 44.8 - 44 = 0.8)
-            anch.append(anchors[a])  # shape为(3, ([712, 2]))， 表示每个检测头对应的712个gt box所对应的anchor。
-            tcls.append(c)  # shape为(3, 712), 表示3个检测头对应的gt box的类别。 
+        fg_mask, geometry_relation = self.get_geometry_constraint(
+            gt_bboxes_per_image,
+            expanded_strides,
+            x_shifts,
+            y_shifts,
+        )
 
-        return tcls, tbox, indices, anch
+        bboxes_preds_per_image = bboxes_preds_per_image[fg_mask]
+        cls_preds_ = cls_preds[batch_idx][fg_mask]
+        clr_preds_ = clr_preds[batch_idx][fg_mask]
+    
+        num_in_boxes_anchor = bboxes_preds_per_image.shape[0]
+
+
+        pair_wise_ious = self.bboxes_iou(gt_bboxes_per_image, bboxes_preds_per_image, True)
+
+        gt_cls_per_image = (
+            F.one_hot(gt_classes.to(torch.int64)//3, self.nc )
+            .float()
+        )
+        gt_clr_per_image = (
+            F.one_hot(gt_classes.to(torch.int64)%3, self.clr )
+            .float()
+        )
+ 
+        pair_wise_ious_loss = -torch.log(pair_wise_ious + 1e-8)
+
+
+        with torch.cuda.amp.autocast(enabled=False):
+            cls_preds_ = (
+                cls_preds_.float().sigmoid_()
+            ).sqrt()
+            clr_preds_ = (
+                clr_preds_.float().sigmoid_()
+            ).sqrt()
+
+            pair_wise_cls_loss = F.binary_cross_entropy(
+                cls_preds_.unsqueeze(0).repeat(num_gt, 1, 1),
+                gt_cls_per_image.unsqueeze(1).repeat(1, num_in_boxes_anchor, 1),
+                reduction="none"
+            ).sum(-1)
+
+            pair_wise_clr_loss = F.binary_cross_entropy(
+                clr_preds_.unsqueeze(0).repeat(num_gt, 1, 1),
+                gt_clr_per_image.unsqueeze(1).repeat(1, num_in_boxes_anchor, 1),
+                reduction="none"
+            ).sum(-1)
+
+
+        del cls_preds_,clr_preds_
+
+        cost = (
+            0.5*pair_wise_cls_loss+
+            0.5*pair_wise_clr_loss+
+            + 3.0 * pair_wise_ious_loss
+            + float(1e6) * (~geometry_relation)
+               )
+
+        (
+            num_fg,
+            gt_matched_classes,
+            pred_ious_this_matching,
+            matched_gt_inds,
+        ) = self.simota_matching(cost, pair_wise_ious, gt_classes, num_gt, fg_mask)
+        del pair_wise_cls_loss,pair_wise_clr_loss ,cost, pair_wise_ious, pair_wise_ious_loss
+
+
+
+        return (
+            gt_matched_classes,
+            fg_mask,
+            pred_ious_this_matching,
+            matched_gt_inds,
+            num_fg,
+        )
+    def get_geometry_constraint(
+        self, gt_bboxes_per_image, expanded_strides, x_shifts, y_shifts,
+    ):
+        """
+        Calculate whether the center of an object is located in a fixed range of
+        an anchor. This is used to avert inappropriate matching. It can also reduce
+        the number of candidate anchors so that the GPU memory is saved.
+        """
+        expanded_strides_per_image = expanded_strides[0]
+        x_centers_per_image = ((x_shifts[0] + 0.5)* expanded_strides_per_image).unsqueeze(0) # each anchor center coord
+        y_centers_per_image = ((y_shifts[0] + 0.5)* expanded_strides_per_image).unsqueeze(0)
+
+        # in fixed center
+        center_radius = 2.5
+        center_dist = expanded_strides_per_image.unsqueeze(0) * center_radius #abs radius
+
+        center_x = torch.sum(gt_bboxes_per_image[...,[0,2,4,6]],dim=-1,keepdim=True)/4
+       
+        center_y = torch.sum(gt_bboxes_per_image[...,[1,3,5,7]],dim=-1,keepdim=True)/4
+       
+
+        gt_bboxes_per_image_l = center_x - center_dist
+        gt_bboxes_per_image_r = center_x + center_dist #(left top ,right bottom)
+        gt_bboxes_per_image_t = center_y - center_dist
+        gt_bboxes_per_image_b = center_y + center_dist
+
+        c_l = x_centers_per_image - gt_bboxes_per_image_l
+        c_r = gt_bboxes_per_image_r - x_centers_per_image
+        c_t = y_centers_per_image - gt_bboxes_per_image_t
+        c_b = gt_bboxes_per_image_b - y_centers_per_image  #gt in 1.5 radius 
+        center_deltas = torch.stack([c_l, c_t, c_r, c_b], 2)
+        is_in_centers = center_deltas.min(dim=-1).values > 0.0  #3,8400 
+        anchor_filter = is_in_centers.sum(dim=0) > 0#1,8400 有用的anchor
+        geometry_relation = is_in_centers[:, anchor_filter]
+
+        return anchor_filter, geometry_relation
+
+    def simota_matching(self, cost, pair_wise_ious, gt_classes, num_gt, fg_mask):
+        matching_matrix = torch.zeros_like(cost, dtype=torch.uint8)
+
+        n_candidate_k = min(10, pair_wise_ious.size(1))
+        topk_ious, _ = torch.topk(pair_wise_ious, n_candidate_k, dim=1)
+        dynamic_ks = torch.clamp(topk_ious.sum(1).int(), min=1)
+        for gt_idx in range(num_gt):
+            _, pos_idx = torch.topk(
+                cost[gt_idx], k=dynamic_ks[gt_idx], largest=False
+            )
+            matching_matrix[gt_idx][pos_idx] = 1
+
+        del topk_ious, dynamic_ks, pos_idx
+
+        anchor_matching_gt = matching_matrix.sum(0)
+        # deal with the case that one anchor matches multiple ground-truths
+        if anchor_matching_gt.max() > 1:
+            multiple_match_mask = anchor_matching_gt > 1
+            _, cost_argmin = torch.min(cost[:, multiple_match_mask], dim=0)
+            matching_matrix[:, multiple_match_mask] *= 0
+            matching_matrix[cost_argmin, multiple_match_mask] = 1
+        fg_mask_inboxes = anchor_matching_gt > 0
+        num_fg = fg_mask_inboxes.sum().item()
+
+        fg_mask[fg_mask.clone()] = fg_mask_inboxes
+
+        matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)
+        gt_matched_classes = gt_classes[matched_gt_inds]
+
+        pred_ious_this_matching = (matching_matrix * pair_wise_ious).sum(0)[
+            fg_mask_inboxes
+        ]
+        return num_fg, gt_matched_classes, pred_ious_this_matching, matched_gt_inds
+    
+    def bboxes_iou(self,bboxes_a, bboxes_b, xyxy=True):
+        if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
+            bboxes_a = xyxyxyxy2xyxy(bboxes_a)
+            bboxes_b = xyxyxyxy2xyxy(bboxes_b)
+        if xyxy:
+            tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
+            br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+            area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
+            area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
+        else:
+            tl = torch.max(
+                (bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
+                (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2),
+            )
+            br = torch.min(
+                (bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
+                (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2),
+            )
+
+            area_a = torch.prod(bboxes_a[:, 2:], 1)
+            area_b = torch.prod(bboxes_b[:, 2:], 1)
+        en = (tl < br).type(tl.type()).prod(dim=2)
+        area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
+        return area_i / (area_a[:, None] + area_b - area_i)

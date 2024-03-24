@@ -3,7 +3,7 @@
 Run YOLOv5 detection inference on images, videos, directories, globs, YouTube, webcam, streams, etc.
 
 Usage - sources:
-    $ python detect.py --weights last.pt --source ../datasets/62.avi                               # webcam
+    $ python detect.py --weights last.pt --source ../datasets/video/B3.avi                               # webcam
                                                      img.jpg                         # image
                                                      vid.mp4                         # video
                                                      screen                          # screenshot

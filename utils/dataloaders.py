@@ -160,6 +160,7 @@ class SmartDistributedSampler(distributed.DistributedSampler):
 
 
 def create_dataloader(path,
+                      negative_path_list,
                       imgsz,
                       batch_size,
                       stride,
@@ -182,6 +183,7 @@ def create_dataloader(path,
   
     dataset = LoadImagesAndLabels(
             path,
+            negative_path_list,
             imgsz,
             batch_size,
             augment=augment,  # augmentation
@@ -497,6 +499,7 @@ class LoadImagesAndLabels(Dataset):
 
     def __init__(self,
                  path,
+                 negative_path_list,
                  img_size=640,
                  batch_size=16,
                  augment=False,
@@ -521,6 +524,10 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
+        self.negative_set = []
+        for negative_path in negative_path_list if negative_path_list is not None else []:
+             for fn in os.listdir(negative_path):
+                 self.negative_set.append(f"{negative_path}/{fn}")
        
         try:
             f = []  # image files
@@ -597,11 +604,14 @@ class LoadImagesAndLabels(Dataset):
 
         # Create indices
         n = len(self.shapes)  # number of images
+        n_neg = len(self.negative_set)  # number of images
         bi = np.floor(np.arange(n) / batch_size).astype(int)  # 每个样本都属于哪个batch
         nb = bi[-1] + 1  # 一共有几个batch
         self.batch = bi  # batch index of image
         self.n = n
         self.indices = np.arange(n)
+        self.indices_neg = np.arange(n_neg)
+
 
         # Update labels 没看懂，但感觉不重要
         include_class = []  # filter labels to include only these classes (optional)
@@ -644,7 +654,9 @@ class LoadImagesAndLabels(Dataset):
         if cache_images == 'ram' and not self.check_cache_ram(prefix=prefix):
             cache_images = False
         self.ims = [None] * n
+        self.ims_neg = [None] * n_neg
         self.npy_files = [Path(f).with_suffix('.npy') for f in self.im_files]
+        self.npy_files_neg = [Path(f).with_suffix('.npy') for f in self.negative_set]
         if cache_images:
             b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
             self.im_hw0, self.im_hw = [None] * n, [None] * n
@@ -657,6 +669,16 @@ class LoadImagesAndLabels(Dataset):
                 else:  # 'ram'
                     self.ims[i], self.im_hw0[i], self.im_hw[i] = x  # im, hw_orig, hw_resized = load_image(self, i)
                     b += self.ims[i].nbytes * WORLD_SIZE
+                pbar.desc = f'{prefix}Caching images ({b / gb:.1f}GB {cache_images})'
+            pbar.close()
+
+            b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
+            self.im_hw0, self.im_hw = [None] * n_neg, [None] * n_neg
+            fcn = self.cache_images_to_disk
+            results = ThreadPool(NUM_THREADS).imap(lambda i: (i, fcn(i,True)), self.indices_neg)
+            pbar = tqdm(results, total=len(self.indices_neg), bar_format=TQDM_BAR_FORMAT, disable=LOCAL_RANK > 0)
+            for i, x in pbar:
+                b += self.npy_files_neg[i].stat().st_size
                 pbar.desc = f'{prefix}Caching images ({b / gb:.1f}GB {cache_images})'
             pbar.close()
         
@@ -766,13 +788,42 @@ class LoadImagesAndLabels(Dataset):
 
         nl = len(labels)  # number of labels
         #xyxy左上角+右下角坐标 -> 归一化的中心点+宽高， clip规范xyxy坐标在图片宽高内。
+        
+
         if nl:
             labels[:, 1:] = xyxyxyxyn(labels[:, 1:], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
         # 别的数据增强
         if self.augment:
-        
             nl = len(labels)  # update after albumentations
+            if random.random() < 0.5 and nl>0 :
+                bk = np.full((img.shape[0], img.shape[1], img.shape[2]), 114, dtype=np.uint8)
+                AB = labels[:, [3, 4]] - labels[:, [1, 2]]  # 2-1
+                BC = labels[:, [5, 6]] - labels[:, [3, 4]]  # 3-2
+                DC = labels[:, [5, 6]] - labels[:, [7, 8]]  # 3-4
+                AD = labels[:, [7, 8]] - labels[:, [1, 2]]  # 4-1
+                for i in range(labels.shape[0]):
+                    edge_plus = [0.3 * abs(random.random() + random.random() - 1) + 0.05,
+                             0.3 * abs(random.random() + random.random() - 1) + 0.5]
+                    pt1i = [max(int(labels[i][1] - AB[i][0] * edge_plus[1] - AD[i][0] * edge_plus[0]), 0),
+                        max(int(labels[i][2] - AB[i][1] * edge_plus[1] - AD[i][1] * edge_plus[0]), 0)]
+                    pt2i = [max(int(labels[i][3] + AB[i][0] * edge_plus[1] - BC[i][0] * edge_plus[0]), 0),
+                        min(int(labels[i][4] + AB[i][1] * edge_plus[1] - BC[i][1] * edge_plus[0]), img.shape[0])]
+                    pt3i = [min(int(labels[i][5] + DC[i][0] * edge_plus[1] + BC[i][0] * edge_plus[0]), img.shape[1]),
+                        min(int(labels[i][6] + DC[i][1] * edge_plus[1] + BC[i][1] * edge_plus[0]), img.shape[0])]
+                    pt4i = [min(int(labels[i][7] - DC[i][0] * edge_plus[1] + AD[i][0] * edge_plus[0]), img.shape[1]),
+                        max(int(labels[i][8] - DC[i][1] * edge_plus[1] + AD[i][1] * edge_plus[0]), 0)]
+                    hulli = cv2.convexHull(np.array([pt1i, pt2i, pt3i, pt4i]))
+                    maski = np.zeros([bk.shape[0], bk.shape[1], 1], dtype=np.int8)
+                    maski = cv2.fillPoly(maski, [hulli], 255)
+                    bk = np.where(maski, img, bk)
+                img = bk
+                negative_index = random.randint(0, len(self.negative_set) - 1)
+                bkimg =self.load_image(negative_index,neg=True)
+                mix = np.where(img == [114, 114, 114], bkimg, img)
+                img = mix
+        
+           
             if random.random() < 0.1:
                 if random.random() < 0.5:
                     ksize = int(random.choice(list(range(3, 7 + 1, 2))))
@@ -797,9 +848,6 @@ class LoadImagesAndLabels(Dataset):
                 if nl:
                     # labels[:, 1] = 1 - labels[:, 1]
                     labels[:, [1, 3, 5, 7]] = 1 - labels[:, [1, 3, 5, 7]]
-            # Cutouts
-            # labels = cutout(img, labels, p=0.5)
-            # nl = len(labels)  # update after cutout
 
         labels_out = torch.zeros((nl, 10))
         if nl:
@@ -811,10 +859,25 @@ class LoadImagesAndLabels(Dataset):
 
         return torch.from_numpy(img), labels_out, self.im_files[index], shapes
 
-    def load_image(self, i):
+    def load_image(self, i,neg = False):
         # Loads 1 image from dataset index 'i', returns (im, original hw, resized hw)
-        im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i],
-        if im is None:  # not cached in RAM
+        if not neg:
+            im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i],
+            if im is None:  # not cached in RAM
+                if fn.exists():  # load npy
+                    im = np.load(fn)
+                else:  # read image
+                    im = cv2.imread(f)  # BGR
+                    assert im is not None, f'Image Not Found {f}'
+                h0, w0 = im.shape[:2]  # orig hw
+                r = self.img_size / max(h0, w0)  # ratio
+                if r != 1:  # if sizes are not equal
+                    interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
+                    im = cv2.resize(im, (math.ceil(w0 * r), math.ceil(h0 * r)), interpolation=interp)
+                return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+            return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
+        else:
+            im, f, fn = self.ims_neg[i], self.negative_set[i], self.npy_files_neg[i],
             if fn.exists():  # load npy
                 im = np.load(fn)
             else:  # read image
@@ -825,14 +888,20 @@ class LoadImagesAndLabels(Dataset):
             if r != 1:  # if sizes are not equal
                 interp = cv2.INTER_LINEAR if (self.augment or r > 1) else cv2.INTER_AREA
                 im = cv2.resize(im, (math.ceil(w0 * r), math.ceil(h0 * r)), interpolation=interp)
-            return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
-        return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
+            return im
+        
 
-    def cache_images_to_disk(self, i):
+
+    def cache_images_to_disk(self, i,neg = False):
         # Saves an image as an *.npy file for faster loading
-        f = self.npy_files[i]
-        if not f.exists():
-            np.save(f.as_posix(), cv2.imread(self.im_files[i]))
+        if not neg:
+            f = self.npy_files[i]
+            if not f.exists():
+                np.save(f.as_posix(), cv2.imread(self.im_files[i]))
+        else:
+            f = self.npy_files_neg[i]
+            if not f.exists():
+                np.save(f.as_posix(), cv2.resize( cv2.imread(self.negative_set[i]), (640, 640)))
 
     def load_mosaic(self, index):
         # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
@@ -874,10 +943,8 @@ class LoadImagesAndLabels(Dataset):
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
-               
+              
                # img,labels = self.makeSentry(img.copy(),labels)
-                
-
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
             
             
