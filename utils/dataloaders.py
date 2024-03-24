@@ -582,8 +582,9 @@ class LoadImagesAndLabels(Dataset):
         # 这个zip怎么就返回这么多了？？？
         labels, shapes, self.segments = zip(*cache.values())
         #label就是gt box的信息，包括类别的坐标，更改后为9=1+8。 shapes是图像宽高信息。 segments都是空。
-
+     
         nl = len(np.concatenate(labels, 0))  # label的数目, 增加一个副样本
+      
         assert nl > 0 or not augment, f'{prefix}All labels empty in {cache_path}, can not start training. {HELP_URL}'
         self.labels = list(labels)
         self.shapes = np.array(shapes)
@@ -943,8 +944,10 @@ class LoadImagesAndLabels(Dataset):
             if labels.size:
                 # 就是将数据集里的xywh转化为xyxy，xyxy是绝对坐标
                 # 需要将xyxyxyxy从相对坐标转化为绝对坐标
-              
+               
                # img,labels = self.makeSentry(img.copy(),labels)
+                
+
                 labels[:, 1:] = xyxyxyxyn2xyxyxyxy(labels[:, 1:], w, h, padw, padh)
             
             

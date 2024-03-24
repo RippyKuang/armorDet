@@ -1050,32 +1050,23 @@ class DecoupledHead(nn.Module):
         self.nc = nc // 3  # number of classes
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
-      
-        self.clso =(3+self.nc)*2
-        self.rego = 32
-
-        self.cls_merge = Conv(ch,self.clso, 3, 1, 1)
-        self.reg_merge = Conv(ch, self.rego, 3, 1, 1)
-
-        self.cls_conv = Conv(self.clso, self.clso, 3, 1, 1)
-        self.reg_conv = Conv(self.rego,  self.rego, 3, 1, 1,g=8)
-    
-        self.cls_preds = nn.Conv2d( self.clso, (self.nc+3) * self.na, 1)
-        self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 8)
-   
-        
+        self.o = ch // 2
+        self.merge = Conv(ch, self.o, 1, 1)
+        self.cls_conv = Conv(self.o, self.o, 3, 1, 1)
+        self.reg_conv = Conv(self.o, self.o, 3, 1, 1)
+     
+        self.cls_preds = nn.Conv2d(self.o, (3+self.nc) * self.na, 1)
+        self.reg_preds = nn.Conv2d(self.o, (8 +1) * self.na, 1)
        
     def forward(self, x):
-        x_cls = self.cls_merge(x)
-        x_reg = self.reg_merge(x)
-    
-        x1 = self.cls_conv(x_cls) 
-        x2 = self.reg_conv(x_reg) 
-    
+        x = self.merge(x)
+        x1 = self.cls_conv(x)
+        x2 = self.reg_conv(x)
+
         x1 = self.cls_preds(x1)
         x2 = self.reg_preds(x2)
-
-        out = torch.cat([x2,x1], 1)
+      
+        out = torch.cat([x2, x1], 1)
         return out
 
 
