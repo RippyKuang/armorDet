@@ -1120,10 +1120,8 @@ class C2f(nn.Module):
     def __init__(self, c1, c2, n=1, shortcut=False,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
-
         self.cv1 = DWConv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
-      
         self.m = nn.ModuleList(v8_C2fBottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
  
     def forward(self, x):
