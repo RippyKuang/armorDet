@@ -278,14 +278,6 @@ class DetectionModel(BaseModel):
             b_cls.data[:] += math.log(5 / m.nc / (640 / s) ** 2) 
             mi_cls.bias = torch.nn.Parameter(b_cls.view(-1), requires_grad=True)
             
-                
-       
-
-                
-
-
-
-
 
 Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibility
 

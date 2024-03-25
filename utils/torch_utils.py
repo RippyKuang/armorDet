@@ -293,7 +293,7 @@ def model_info(model, verbose=False, imgsz=640):
     name = Path(model.yaml_file).stem.replace('yolov5', 'YOLOv5') if hasattr(model, 'yaml_file') else 'Model'
     LOGGER.info(f'{name} summary: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}')
     for i,dl in enumerate(model.model[-1].m):
-        LOGGER.info(f'layer{i} summary: clso {dl.clso} , clro {dl.clro} , rego {dl.rego}')
+        LOGGER.info(f'DDetect{i} summary: clso {dl.clso} , clro {dl.clro} , rego {dl.rego}')
 
 
 def scale_img(img, ratio=1.0, same_shape=False, gs=32):  # img(16,3,256,416)
