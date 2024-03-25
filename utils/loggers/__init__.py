@@ -83,16 +83,16 @@ class Loggers():
         self.include = include
         self.keys = [
             'train/box_loss',
-            'train/obj_loss',
             'train/cls_loss',
+            'train/clr_loss',
             'train/pts_loss',  # train loss
             'metrics/precision',
             'metrics/recall',
             'metrics/mAP_0.5',
             'metrics/mAP_0.5:0.95',  # metrics
             'val/box_loss',
-            'val/obj_loss',
-            'val/cls_loss', 
+            'val/cls_loss',
+            'val/clr_loss', 
             'val/pts_loss', # val loss
             'x/lr0',
             'x/lr1',
