@@ -167,17 +167,14 @@ class CrossConv(nn.Module):
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, dw=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        if not dw:
-            self.cv1 = Conv(c1, c_, 1, 1)
-            self.cv2 = Conv(c1, c_, 1, 1)
-            self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        else:
-            self.cv1 = DWConv(c1, c_, 1, 1)
-            self.cv2 = DWConv(c1, c_, 1, 1)
-            self.cv3 = DWConv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+      
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+       
         self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
@@ -1064,6 +1061,7 @@ class Shuffle_Block(nn.Module):
         return out
  
 class DecoupledHead(nn.Module):
+
     def __init__(self, ch=256, nc=80, anchors=()):
         super().__init__()
         self.nclr = 3
@@ -1087,8 +1085,6 @@ class DecoupledHead(nn.Module):
         self.clr_preds = nn.Conv2d( self.clro, (self.nclr) * self.na, 1)
         self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 8)
    
-        
-       
     def forward(self, x):
         x_cls = self.cls_merge(x)
         x_clr = self.clr_merge(x)
@@ -1121,15 +1117,13 @@ class v8_C2fBottleneck(nn.Module):
 
 class C2f(nn.Module):
     # CSP Bottleneck with 2 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=False, dw=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
-        if dw:
-            self.cv1 = DWConv(c1, 2 * self.c, 1, 1)
-            self.cv2 = DWConv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
-        else:
-            self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-            self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
+
+        self.cv1 = DWConv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
+      
         self.m = nn.ModuleList(v8_C2fBottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
  
     def forward(self, x):
