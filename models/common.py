@@ -167,15 +167,17 @@ class CrossConv(nn.Module):
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, dw=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        # self.cv1 = DWConv(c1, c_, 1, 1)
-        # self.cv2 = DWConv(c1, c_, 1, 1)
-        # self.cv3 = DWConv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        if not dw:
+            self.cv1 = Conv(c1, c_, 1, 1)
+            self.cv2 = Conv(c1, c_, 1, 1)
+            self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        else:
+            self.cv1 = DWConv(c1, c_, 1, 1)
+            self.cv2 = DWConv(c1, c_, 1, 1)
+            self.cv3 = DWConv(2 * c_, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
@@ -239,6 +241,23 @@ class SPPF(nn.Module):
         c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+
+    def forward(self, x):
+        x = self.cv1(x)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')  # suppress torch 1.9.0 max_pool2d() warning
+            y1 = self.m(x)
+            y2 = self.m(y1)
+            return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
+        
+class SPPFF(nn.Module):
+    # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
+    def __init__(self, c1, c2, k=5):  # equivalent to SPP(k=(5, 9, 13))
+        super().__init__()
+        c_ = c1 // 2  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = DWConv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
 
     def forward(self, x):
@@ -1047,35 +1066,43 @@ class Shuffle_Block(nn.Module):
 class DecoupledHead(nn.Module):
     def __init__(self, ch=256, nc=80, anchors=()):
         super().__init__()
-        self.nc = nc // 3  # number of classes
+        self.nclr = 3
+        self.nc = nc // self.nclr  # number of classes
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
       
-        self.clso =(3+self.nc)*2
-        self.rego = 32
+        self.clso  =min(max(ch // 2,self.nc * 2),80)
+        self.clro  =min(max(ch // 8, 8),16)
+        self.rego  =make_divisible(max(ch // 4, 16),8)
 
         self.cls_merge = Conv(ch,self.clso, 3, 1, 1)
-        self.reg_merge = Conv(ch, self.rego, 3, 1, 1)
+        self.clr_merge = Conv(ch,self.clro, 3, 1, 1)
+        self.reg_merge = Conv(ch,self.rego, 3, 1, 1)
 
         self.cls_conv = Conv(self.clso, self.clso, 3, 1, 1)
+        self.clr_conv = Conv(self.clro, self.clro, 3, 1, 1)
         self.reg_conv = Conv(self.rego,  self.rego, 3, 1, 1,g=8)
     
-        self.cls_preds = nn.Conv2d( self.clso, (self.nc+3) * self.na, 1)
+        self.cls_preds = nn.Conv2d( self.clso, (self.nc) * self.na, 1)
+        self.clr_preds = nn.Conv2d( self.clro, (self.nclr) * self.na, 1)
         self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 8)
    
         
        
     def forward(self, x):
         x_cls = self.cls_merge(x)
+        x_clr = self.clr_merge(x)
         x_reg = self.reg_merge(x)
     
         x1 = self.cls_conv(x_cls) 
-        x2 = self.reg_conv(x_reg) 
+        x2 = self.clr_conv(x_clr) 
+        x3 = self.reg_conv(x_reg) 
     
         x1 = self.cls_preds(x1)
-        x2 = self.reg_preds(x2)
+        x2 = self.clr_preds(x2)
+        x3 = self.reg_preds(x3)
 
-        out = torch.cat([x2,x1], 1)
+        out = torch.cat([x3,x2,x1], 1)
         return out
 
 
@@ -1116,6 +1143,7 @@ class Silence(nn.Module):
         super(Silence, self).__init__()
     def forward(self, x):    
         return x
+    
 class CBLinear(nn.Module):
     def __init__(self, c1, c2s, k=1, s=1, p=None, g=1):  # ch_in, ch_outs, kernel, stride, padding, groups
         super(CBLinear, self).__init__()
@@ -1125,4 +1153,14 @@ class CBLinear(nn.Module):
     def forward(self, x):
         outs = self.conv(x).split(self.c2s, dim=1)
         return outs
+    
+class CBFuse(nn.Module):
+    def __init__(self, idx):
+        super(CBFuse, self).__init__()
+        self.idx = idx
 
+    def forward(self, xs):
+        target_size = xs[-1].shape[2:]
+        res = [F.interpolate(x[self.idx[i]], size=target_size, mode='nearest') for i, x in enumerate(xs[:-1])]
+        out = torch.sum(torch.stack(res + xs[-1:]), dim=0)
+        return out

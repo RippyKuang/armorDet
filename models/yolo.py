@@ -27,7 +27,8 @@ if platform.system() != 'Windows':
 
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
-                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,DecoupledHead,C2f,Silence,CBLinear,CBFuse)
+                           GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,
+                           DecoupledHead,C2f,Silence,CBLinear,CBFuse,SPPFF)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -274,7 +275,7 @@ class DetectionModel(BaseModel):
         for mi, s in zip(m.m, m.stride):  # from
             mi_cls = mi.cls_preds
             b_cls = mi_cls.bias.view(1, -1)  # conv.bias(255) to (3,85)
-            b_cls.data[3:] += math.log(5 / m.nc / (640 / s) ** 2) 
+            b_cls.data[:] += math.log(5 / m.nc / (640 / s) ** 2) 
             mi_cls.bias = torch.nn.Parameter(b_cls.view(-1), requires_grad=True)
             
                 
@@ -347,7 +348,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in {
-                Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
+                Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF,SPPFF, DWConv, MixConv2d, Focus, CrossConv,
                 BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA,CBRM,Shuffle_Block,C2f,Silence,CBLinear,CBFuse}:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
