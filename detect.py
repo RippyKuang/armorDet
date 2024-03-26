@@ -124,6 +124,7 @@ def run(
     # print(prof.table())
     # prof.export_chrome_trace('./profile.json')
     seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
+    det_num = 0
     for path, im, im0s, vid_cap, s in dataset: #path是图片的绝对路径 im0s是原图，im是缩放后的
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -190,12 +191,12 @@ def run(
                 # for c in det[:, 5].unique():
                 #     n = (det[:, 5] == c).sum()  # detections per class
                 #     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-
-                # Write results
                 for *xyxyxyxy, conf, cls in reversed(det):
                     c = int(cls)  # integer class
                     label = names[c] if hide_conf else f'{names[c]}'
                     confidence = round(float(conf.item()), 2)
+
+                    det_num = det_num + 1
 
                     p1 = list(map(int, xyxyxyxy[0: 2]))
                     p2 = list(map(int, xyxyxyxy[2: 4]))
@@ -262,6 +263,7 @@ def run(
     # Print results
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
+    LOGGER.info(f'total detection : {det_num}')
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")

@@ -28,7 +28,7 @@ if platform.system() != 'Windows':
 from models.common import (C3, C3SPP, C3TR, SPP, SPPF, Bottleneck, BottleneckCSP, C3Ghost, C3x, Classify, Concat,
                            Contract, Conv, CrossConv, DetectMultiBackend, DWConv, DWConvTranspose2d, Expand, Focus,
                            GhostBottleneck, GhostConv, Proto,SE,BiFPN_Concat3,BiFPN_Concat2,EMA,CBRM,Shuffle_Block,
-                           DecoupledHead,C2f,Silence,CBLinear,CBFuse,SPPFF,ADown)
+                           DecoupledHead,C2f,Silence,CBLinear,SPPFF,DWC3)
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, colorstr, make_divisible, print_args
@@ -53,7 +53,7 @@ class Detect(nn.Module):
         self.clr = 3
         self.nc = nc // self.clr  # number of classes
         self.no = self.clr + self.nc + 8  # number of outputs per anchor +xyxyxyxy conf
-        self.tno = self.clr*self.nc + 8
+        self.tno = self.clr + self.nc + 8
         self.nl = len(anchors)  # number of detection layers 每层有一个anchor
         self.na = len(anchors[0]) // 2  # number of anchors 每个anchor有两个参数，所以除以二
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
@@ -82,14 +82,11 @@ class Detect(nn.Module):
                
                 ep,els = x[i].split((8,self.clr+self.nc), dim=-1)
                 clr,cls = els.sigmoid().split((self.clr,self.nc), dim=-1)
-        
-                clr = clr.repeat(1,1,1,self.nc)
-                cls = cls.repeat_interleave(3,dim=-1)
-                cls = clr * cls
+    
              
                 xy = (ep+self.grid[i])*self.stride[i]
-                y = torch.cat((xy,cls), -1)
-                z.append(y.view(bs, self.na * nx * ny, self.tno))
+                y = torch.cat((xy,clr,cls), -1)
+                z.append(y.view(bs, self.na * nx * ny, 19))
 
         return x if self.training else (torch.cat(z, 1), ) if self.export else (torch.cat(z, 1), x)
 
@@ -103,66 +100,7 @@ class Detect(nn.Module):
      
         return grid
 
-class DualDetect(nn.Module):
-    # YOLOv5 Detect head for detection models
-    stride = None  # strides computed during build
-    dynamic = False  # force grid reconstruction
-    export = False  # export mode
 
-    def __init__(self, nc=80, anchors=(), ch=(), inplace=True):  # detection layer
-        super().__init__()
-        self.clr = 3
-        self.nc = nc // self.clr  # number of classes
-        self.no = self.clr + self.nc + 8  # number of outputs per anchor +xyxyxyxy conf
-        self.tno = self.clr*self.nc + 8
-        self.nl = len(anchors)  # number of detection layers 每层有一个anchor
-        self.na = len(anchors[0]) // 2  # number of anchors 每个anchor有两个参数，所以除以二
-        self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
-     
-        self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
-        self.m = nn.ModuleList(DecoupledHead(x, nc, anchors) for x in ch)
-        self.inplace = inplace  # use inplace ops (e.g. slice assignment)
-
-    def forward(self, x):
-        z = []  # inference output
-        #x是一个list，是detect层的输入，list的长度为3
-        #shape分别是(n, 128, 80, 80)， (n, 256, 40, 40), (n, 512, 20, 20)
-        for i in range(self.nl):   # nl:detect层的数目
-         
-            x[i] = self.m[i](x[i])
-            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = x[i].view(bs,self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
-
-            if not self.training:  # inference 如果是推断
-                #预测的box的中心点x和y是相对位置, 在推理的时候,需要映射到原图上,因此需要先加上grid的坐标,再乘以stride映射回原图
-                if self.dynamic or self.grid[i].shape[1:3] != x[i].shape[1:3]:
-                    self.grid[i] = self._make_grid(nx, ny, i)
-                    self.grid[i]=self.grid[i].repeat(1,1,1,4)
-                
-
-               
-                ep,els = x[i].split((8,self.clr+self.nc), dim=-1)
-                clr,cls = els.sigmoid().split((self.clr,self.nc), dim=-1)
-        
-                clr = clr.repeat(1,1,1,self.nc)
-                cls = cls.repeat_interleave(3,dim=-1)
-                cls = clr * cls
-             
-                xy = (ep+self.grid[i])*self.stride[i]
-                y = torch.cat((xy,cls), -1)
-                z.append(y.view(bs, self.na * nx * ny, self.tno))
-
-        return x if self.training else (torch.cat(z, 1), ) if self.export else (torch.cat(z, 1), x)
-
-    def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=check_version(torch.__version__, '1.10.0')):
-        d = self.anchors[i].device
-        t = self.anchors[i].dtype
-        shape = 1, ny, nx, 2  # grid shape
-        y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
-        yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)  # torch>=0.7 compatibility
-        grid = torch.stack((xv, yv), 2).expand(shape)  # add grid offset, i.e. y = 2.0 * x - 0.5
-     
-        return grid
     
 
 class Segment(Detect):
@@ -337,6 +275,11 @@ class DetectionModel(BaseModel):
             b_cls.data[:] += math.log(5 / m.nc / (640 / s) ** 2) 
             mi_cls.bias = torch.nn.Parameter(b_cls.view(-1), requires_grad=True)
             
+            mi_clr = mi.clr_preds
+            b_clr = mi_clr.bias.view(1, -1)  # conv.bias(255) to (3,85)
+            b_clr.data[:] += math.log(5 / m.clr / (640 / s) ** 2) 
+            mi_clr.bias = torch.nn.Parameter(b_clr.view(-1), requires_grad=True)
+            
 
 Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibility
 
@@ -401,13 +344,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         if m in {
                 Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF,SPPFF, DWConv, MixConv2d, Focus, CrossConv,
                 BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x, SE,EMA,CBRM,
-                Shuffle_Block,C2f,Silence,CBLinear,CBFuse,ADown}:
+                Shuffle_Block,C2f,Silence,CBLinear,DWC3}:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x,C2f,CBLinear,CBFuse}:
+            if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x,C2f,CBLinear,DWC3}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:

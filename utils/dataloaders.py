@@ -674,7 +674,6 @@ class LoadImagesAndLabels(Dataset):
             pbar.close()
 
             b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
-            self.im_hw0, self.im_hw = [None] * n_neg, [None] * n_neg
             fcn = self.cache_images_to_disk
             results = ThreadPool(NUM_THREADS).imap(lambda i: (i, fcn(i,True)), self.indices_neg)
             pbar = tqdm(results, total=len(self.indices_neg), bar_format=TQDM_BAR_FORMAT, disable=LOCAL_RANK > 0)

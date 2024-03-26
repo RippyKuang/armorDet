@@ -249,8 +249,11 @@ class ComputeKLoss:
  
 
         _cls_targets = torch.cat(cls_targets, 0)
-        clr_targets = torch.cat(clr_targets, 0)
+        clr_targets = torch.cat(clr_targets, 0).float()
+        
         reg_targets = torch.cat(reg_targets, 0)
+        
+        
 
         fg_masks = torch.cat(fg_masks, 0)
      
@@ -259,6 +262,7 @@ class ComputeKLoss:
 
         cls_targets = torch.zeros_like(cls_preds)
         cls_targets[fg_masks] = _cls_targets
+        
         target_cls_sum = max(_cls_targets.sum(), 1)
 
       
@@ -267,7 +271,7 @@ class ComputeKLoss:
         loss_iou =  (1.0 - bbox_iou(bbox_preds.view(-1, 8)[fg_masks], reg_targets,xywh=False,CIoU=True).squeeze()).sum() / num_fg
       
         loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / target_cls_sum
-        loss_clr = self.bcewithlog_loss(clr_preds[fg_masks], clr_targets.float()).sum() / num_fg
+        loss_clr = self.bcewithlog_loss(clr_preds[fg_masks], clr_targets).sum() / num_fg
         loss_l1 = (self.l1_loss(bbox_preds.view(-1, 8)[fg_masks], reg_targets)).sum() / num_fg
 
         reg_weight = 8.0

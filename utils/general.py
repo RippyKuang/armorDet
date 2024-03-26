@@ -935,8 +935,8 @@ def non_max_suppression(
         prediction = prediction.cpu()
     bs = prediction.shape[0]  # batch size
     nc = prediction.shape[2] - nm - 8 # number of classes
-    mi = 8 + nc  # mask start index
-    xc = prediction[:, :,8:mi].amax(-1) > conf_thres  # candidates
+    mi = 8 + 3 + nc  # mask start index
+    xc = prediction[:, :,11:mi].amax(-1) > conf_thres  # candidates
 
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
@@ -966,10 +966,11 @@ def non_max_suppression(
         box = xyxyxyxy2xyxy(_x[:, :8])  # center_x, center_y, width, height) to (x1, y1, x2, y2)
 
         # Detections matrix nx6 (xyxy, conf, cls)
-        conf, j = _x[:, 8:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
+        conf, j = _x[:, 11:mi].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
+        _ ,   i = _x[:, 8:11].max(1, keepdim=True)  #函数会返回两个tensor，第一个tensor是每行的最大值；第二个tensor是每行最大值的索引,即置信度最高的类别
         thres_ = conf.view(-1) > conf_thres
-        x = torch.cat((box, conf, j.float()), 1)[thres_] #0-3是box，4是置信度，5是类别
-        x_ep = torch.cat((_x[:, :8], conf,j.float()),1)[thres_]
+        x = torch.cat((box, conf, (j*3+i).float()), 1)[thres_] #0-3是box，4是置信度，5是类别
+        x_ep = torch.cat((_x[:, :8], conf, (j*3+i).float()),1)[thres_]
         # 从这里开始x的格式都是xyxy
         
         x = x[torch.isfinite(x).all(1)]

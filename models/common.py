@@ -167,14 +167,25 @@ class CrossConv(nn.Module):
 
 class C3(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-      
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-       
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+    
+class DWC3(nn.Module):
+    # CSP Bottleneck with 3 convolutions
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = DWConv(c1, c_, 1, 1)
+        self.cv2 = DWConv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
@@ -1061,7 +1072,6 @@ class Shuffle_Block(nn.Module):
         return out
  
 class DecoupledHead(nn.Module):
-
     def __init__(self, ch=256, nc=80, anchors=()):
         super().__init__()
         self.nclr = 3
@@ -1079,12 +1089,14 @@ class DecoupledHead(nn.Module):
 
         self.cls_conv = Conv(self.clso, self.clso, 3, 1, 1)
         self.clr_conv = Conv(self.clro, self.clro, 3, 1, 1)
-        self.reg_conv = Conv(self.rego,  self.rego, 3, 1, 1,g=8)
+        self.reg_conv = Conv(self.rego,  self.rego, 3, 1, 1,g=4)
     
         self.cls_preds = nn.Conv2d( self.clso, (self.nc) * self.na, 1)
         self.clr_preds = nn.Conv2d( self.clro, (self.nclr) * self.na, 1)
-        self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 8)
+        self.reg_preds = nn.Conv2d( self.rego, (8) * self.na, 1,groups= 4)
    
+        
+       
     def forward(self, x):
         x_cls = self.cls_merge(x)
         x_clr = self.clr_merge(x)
@@ -1117,11 +1129,15 @@ class v8_C2fBottleneck(nn.Module):
 
 class C2f(nn.Module):
     # CSP Bottleneck with 2 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=False,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, dw=True,g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
-        self.cv1 = DWConv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
+        if dw:
+            self.cv1 = DWConv(c1, 2 * self.c, 1, 1)
+            self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
+        else:
+            self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+            self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)4
         self.m = nn.ModuleList(v8_C2fBottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
  
     def forward(self, x):
@@ -1146,28 +1162,3 @@ class CBLinear(nn.Module):
         outs = self.conv(x).split(self.c2s, dim=1)
         return outs
     
-class CBFuse(nn.Module):
-    def __init__(self, idx):
-        super(CBFuse, self).__init__()
-        self.idx = idx
-
-    def forward(self, xs):
-        target_size = xs[-1].shape[2:]
-        res = [torch.nn.functional.interpolate(x[self.idx[i]], size=target_size, mode='nearest') for i, x in enumerate(xs[:-1])]
-        out = torch.sum(torch.stack(res + xs[-1:]), dim=0)
-        return out
-
-class ADown(nn.Module):
-    def __init__(self, c1, c2):  # ch_in, ch_out, shortcut, kernels, groups, expand
-        super().__init__()
-        self.c = c2 // 2
-        self.cv1 = Conv(c1 // 2, self.c, 3, 2, 1)
-        self.cv2 = Conv(c1 // 2, self.c, 1, 1, 0)
-
-    def forward(self, x):
-        x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
-        x1,x2 = x.chunk(2, 1)
-        x1 = self.cv1(x1)
-        x2 = torch.nn.functional.max_pool2d(x2, 3, 2, 1)
-        x2 = self.cv2(x2)
-        return torch.cat((x1, x2), 1)

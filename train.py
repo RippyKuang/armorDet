@@ -488,9 +488,9 @@ def parse_opt(known=False):
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
-    parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW', 'LION'], default='AdamW', help='optimizer')
+    parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW', 'LION'], default='SGD', help='optimizer')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
-    parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
+    parser.add_argument('--workers', type=int, default=16, help='max dataloader workers (per RANK in DDP mode)')
     parser.add_argument('--project', default=ROOT / 'runs/train', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
@@ -512,7 +512,7 @@ def parse_opt(known=False):
     # NDJSON logging
     parser.add_argument('--ndjson-console', action='store_true', help='Log ndjson to console')
     parser.add_argument('--ndjson-file', action='store_true', help='Log ndjson to file')
-    parser.add_argument('--negative-path', nargs='+', default=['../datasets/static_sun09_database'],
+    parser.add_argument('--negative-path', nargs='+', default=['../static_sun09_database'],
                         type=str)
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
