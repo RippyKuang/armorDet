@@ -78,9 +78,8 @@ class QFocalLoss(nn.Module):
         loss = self.loss_fcn(pred, true)
 
         pred_prob = torch.sigmoid(pred)  # prob from logits
-        alpha_factor = true * self.alpha + (1 - true) * (1 - self.alpha)
         modulating_factor = torch.abs(true - pred_prob) ** self.gamma
-        loss *= alpha_factor * modulating_factor
+        loss *=  modulating_factor
 
         if self.reduction == 'mean':
             return loss.mean()
@@ -89,7 +88,16 @@ class QFocalLoss(nn.Module):
         else:  # 'none'
             return loss
 
+class VarifocalLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
+    def forward(self, pred_score, gt_score, label, alpha=0.75, gamma=2.0):
+        weight = alpha * pred_score.sigmoid().pow(gamma) * (1 - label) + gt_score * label
+        with torch.cuda.amp.autocast(enabled=False):
+            loss = (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(),
+                                                       reduction="none") * weight).sum()
+        return loss
 
 
 class ComputeKLoss:
@@ -112,6 +120,7 @@ class ComputeKLoss:
        
         self.l1_loss =nn.SmoothL1Loss(reduction='none')
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
+        self.vfl = VarifocalLoss()
         
        
 
@@ -185,6 +194,7 @@ class ComputeKLoss:
       
 
         cls_targets = []
+        cls_labels = []
         clr_targets = []
         reg_targets = []
     
@@ -199,6 +209,7 @@ class ComputeKLoss:
             num_gts += num_gt
             if num_gt == 0:
                 cls_target = outputs.new_zeros((0, self.nc))
+                cls_label = outputs.new_zeros((0, self.nc))
                 clr_target = outputs.new_zeros((0, self.clr))
                 reg_target = outputs.new_zeros((0, 8))
               
@@ -231,17 +242,16 @@ class ComputeKLoss:
                 torch.cuda.empty_cache()
                 num_fg += num_fg_img
 
-                cls_target = F.one_hot(
-                    gt_matched_classes.to(torch.int64) // 3, self.nc
-                ) * pred_ious_this_matching.unsqueeze(-1)
-                clr_target = F.one_hot(
-                    gt_matched_classes.to(torch.int64) % 3, self.clr
-                )
+                cls_label = F.one_hot(gt_matched_classes.to(torch.int64) // 3, self.nc) 
+                cls_target = cls_label * pred_ious_this_matching.unsqueeze(-1)
+                
+                clr_target = F.one_hot(gt_matched_classes.to(torch.int64) % 3, self.clr)
          
                 reg_target = gt_bboxes_per_image[matched_gt_inds]
                
 
             cls_targets.append(cls_target)
+            cls_labels.append(cls_label)
             clr_targets.append(clr_target)
             reg_targets.append(reg_target)
 
@@ -249,6 +259,7 @@ class ComputeKLoss:
  
 
         _cls_targets = torch.cat(cls_targets, 0)
+        _cls_labels = torch.cat(cls_labels, 0)
         clr_targets = torch.cat(clr_targets, 0).float()
         
         reg_targets = torch.cat(reg_targets, 0)
@@ -261,25 +272,27 @@ class ComputeKLoss:
         clr_preds = clr_preds.view(-1, self.clr)
 
         cls_targets = torch.zeros_like(cls_preds)
+        cls_labels = torch.zeros_like(cls_preds)
         cls_targets[fg_masks] = _cls_targets
+        cls_labels[fg_masks] = _cls_labels.float()
         
         target_cls_sum = max(_cls_targets.sum(), 1)
-
-      
         num_fg = max(num_fg, 1)
         
         loss_iou =  (1.0 - bbox_iou(bbox_preds.view(-1, 8)[fg_masks], reg_targets,xywh=False,CIoU=True).squeeze()).sum() / num_fg
       
-        loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / target_cls_sum
+      # loss_cls = self.bcewithlog_loss(cls_preds, cls_targets).sum() / target_cls_sum
+        loss_cls = self.vfl(cls_preds, cls_targets, cls_labels) / target_cls_sum
         loss_clr = self.bcewithlog_loss(clr_preds[fg_masks], clr_targets).sum() / num_fg
         loss_l1 = (self.l1_loss(bbox_preds.view(-1, 8)[fg_masks], reg_targets)).sum() / num_fg
 
         reg_weight = 8.0
-        cls_weight = 0.5
+        cls_weight = 1.2
+        clr_weight = 15.0
         l1_weight = 0.2
-        loss = reg_weight * loss_iou  + cls_weight*loss_cls + l1_weight * loss_l1 +loss_clr
+        loss = reg_weight * loss_iou  + cls_weight*loss_cls + l1_weight * loss_l1 + clr_weight * loss_clr
 
-        return loss, torch.cat((reg_weight*loss_iou.reshape(1), cls_weight*loss_cls.reshape(1), (loss_clr).reshape(1),l1_weight * loss_l1.reshape(1))).detach()
+        return loss, torch.cat((reg_weight*loss_iou.reshape(1), cls_weight*loss_cls.reshape(1), (clr_weight * loss_clr).reshape(1),l1_weight * loss_l1.reshape(1))).detach()
     
     @torch.no_grad()
     def get_assignments(

@@ -1079,8 +1079,8 @@ class DecoupledHead(nn.Module):
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
       
-        self.clso  =min(max(ch // 2,self.nc * 2),80)
-        self.clro  =min(max(ch // 8, 8),16)
+        self.clso  = 5 * ch // 8
+        self.clro  = min( ch // 16,5 )
         self.rego  =make_divisible(max(ch // 4, 16),8)
 
         self.cls_merge = Conv(ch,self.clso, 3, 1, 1)
@@ -1093,7 +1093,7 @@ class DecoupledHead(nn.Module):
     
         self.cls_preds = nn.Conv2d( self.clso, (self.nc) * self.na, 1)
         self.clr_preds = nn.Conv2d( self.clro, (self.nclr) * self.na, 1)
-        self.reg_preds = nn.Conv2d( self.rego, (8) * self.na, 1,groups= 4)
+        self.reg_preds = nn.Conv2d(self.rego, (8) * self.na, 1,groups= 4)
    
         
        
