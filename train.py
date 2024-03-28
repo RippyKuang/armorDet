@@ -512,7 +512,7 @@ def parse_opt(known=False):
     # NDJSON logging
     parser.add_argument('--ndjson-console', action='store_true', help='Log ndjson to console')
     parser.add_argument('--ndjson-file', action='store_true', help='Log ndjson to file')
-    parser.add_argument('--negative-path', nargs='+', default=['../static_sun09_database'],
+    parser.add_argument('--negative-path', nargs='+', default=['../datasets/static_sun09_database'],
                         type=str)
 
     return parser.parse_known_args()[0] if known else parser.parse_args()
